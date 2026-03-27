@@ -1,115 +1,43 @@
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
-import Image from 'next/image';
-import { 
-  LayoutDashboard, 
-  Kanban, 
-  Plus, 
-  Moon, 
-  Sun, 
-  CheckCircle2, 
-  Clock, 
-  AlertCircle, 
-  MoreVertical,
-  Trash2,
-  ChevronRight,
-  TrendingUp,
-  Package,
-  Users,
-  DollarSign
+import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
+import {
+  LayoutDashboard, Kanban, Plus, Moon, Sun, CheckCircle2,
+  Clock, AlertCircle, MoreVertical, Trash2, ChevronRight,
+  TrendingUp, Package, LogOut, Loader2
 } from 'lucide-react';
-import { 
-  BarChart, 
-  Bar, 
-  XAxis, 
-  YAxis, 
-  CartesianGrid, 
-  Tooltip, 
-  ResponsiveContainer, 
-  PieChart, 
-  Pie, 
-  Cell 
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+  PieChart, Pie, Cell
 } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
+import { supabase } from '@/lib/supabase';
 
 // --- Types ---
-
-type TaskStatus = 'A Fazer' | 'Em Progresso' | 'Concluído';
+type TaskStatus = 'backlog' | 'todo' | 'doing' | 'done';
 
 interface Task {
   id: string;
   title: string;
   description: string;
   status: TaskStatus;
-  priority: 'Baixa' | 'Média' | 'Alta';
-  category: 'Estoque' | 'Financeiro' | 'Marketing' | 'Operacional';
-  date: string;
+  order_index: number;
+  due_date: string | null;
+  user_id?: string;
 }
 
-// --- Mock Data ---
+const STATUS_MAP: Record<TaskStatus, string> = {
+  backlog: 'Backlog',
+  todo: 'A Fazer',
+  doing: 'Em Progresso',
+  done: 'Concluído'
+};
 
-const INITIAL_TASKS: Task[] = [
-  {
-    id: '1',
-    title: 'Reposição de estoque de bebidas',
-    description: 'Fazer pedido de refrigerantes e águas para o final de semana.',
-    status: 'A Fazer',
-    priority: 'Alta',
-    category: 'Estoque',
-    date: '2026-03-27',
-  },
-  {
-    id: '2',
-    title: 'Conferência de validade - Prateleira 3',
-    description: 'Verificar produtos da seção de laticínios.',
-    status: 'Em Progresso',
-    priority: 'Média',
-    category: 'Operacional',
-    date: '2026-03-26',
-  },
-  {
-    id: '3',
-    title: 'Pagamento fornecedor de hortifruti',
-    description: 'Transferência via PIX para o Sr. Carlos.',
-    status: 'Concluído',
-    priority: 'Alta',
-    category: 'Financeiro',
-    date: '2026-03-25',
-  },
-  {
-    id: '4',
-    title: 'Postagem Instagram: Promoção de Páscoa',
-    description: 'Criar arte no Canva e postar nos stories.',
-    status: 'A Fazer',
-    priority: 'Média',
-    category: 'Marketing',
-    date: '2026-03-28',
-  },
-  {
-    id: '5',
-    title: 'Limpeza do depósito',
-    description: 'Organizar caixas vazias e varrer o chão.',
-    status: 'Em Progresso',
-    priority: 'Baixa',
-    category: 'Operacional',
-    date: '2026-03-26',
-  },
-  {
-    id: '6',
-    title: 'Fechamento de caixa mensal',
-    description: 'Reunir notas fiscais e enviar para o contador.',
-    status: 'A Fazer',
-    priority: 'Alta',
-    category: 'Financeiro',
-    date: '2026-03-31',
-  }
-];
-
+const COLUMNS: TaskStatus[] = ['backlog', 'todo', 'doing', 'done'];
 const COLORS = ['#3b82f6', '#f59e0b', '#10b981', '#ef4444'];
 
 // --- Components ---
-
 const StatCard = ({ title, value, icon: Icon, color }: any) => (
   <div className="bg-white dark:bg-zinc-900 p-6 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
     <div className="flex items-center justify-between mb-4">
@@ -123,176 +51,325 @@ const StatCard = ({ title, value, icon: Icon, color }: any) => (
 );
 
 export default function PlannerApp() {
-  const [tasks, setTasks] = useState<Task[]>(INITIAL_TASKS);
+  const [session, setSession] = useState<any>(null);
+  const [loadingSession, setLoadingSession] = useState(true);
+
+  // Auth Form State
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // App State
+  const [tasks, setTasks] = useState<Task[]>([]);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'kanban'>('dashboard');
-  const [isThinking, setIsThinking] = useState(false);
-  const [newTask, setNewTask] = useState({ title: '', description: '', category: 'Operacional' as any });
+  const [newTask, setNewTask] = useState({ title: '', description: '' });
+  const [isAdding, setIsAdding] = useState(false);
 
-  // --- Logic ---
+  // --- Auth & Initial Fetch ---
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoadingSession(false);
+      if (session) fetchTasks(session.user.id);
+    });
 
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) fetchTasks(session.user.id);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const fetchTasks = async (userId: string) => {
+    const { data, error } = await supabase
+      .from('tasks')
+      .select('*')
+      .eq('user_id', userId)
+      .order('order_index', { ascending: true });
+
+    if (data) setTasks(data);
+    else if (error) console.error(error);
+  };
+
+  const handleLogin = async (e: React.FormEvent, isSignUp = false) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthLoading(true);
+
+    const { error } = isSignUp
+      ? await supabase.auth.signUp({ email, password })
+      : await supabase.auth.signInWithPassword({ email, password });
+
+    if (error) {
+      setAuthError(error.message);
+    } else if (isSignUp) {
+      alert("Comando de cadastro enviado com sucesso! \\n\\nSe a página não entrar sozinha agora, é porque o Supabase bloqueou por padrão pedindo verificação de e-mail.\\n\\nPara desbloquear o modo de desenvolvedor fácil: Abra o seu Supabase > Authentication > Providers > Email > Desmarque a opção 'Confirm email' e salve.");
+    }
+    setAuthLoading(false);
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setTasks([]);
+  };
+
+  // --- Task Logic ---
+  const handleAddTask = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newTask.title || !session) return;
+    setIsAdding(true);
+
+    const maxOrder = tasks
+      .filter(t => t.status === 'backlog')
+      .reduce((max, t) => Math.max(max, t.order_index), -1);
+
+    const taskToInsert = {
+      title: newTask.title,
+      description: newTask.description,
+      status: 'backlog' as TaskStatus,
+      order_index: maxOrder + 1,
+      user_id: session.user.id
+    };
+
+    // Optimistic Update
+    const tempId = Math.random().toString();
+    setTasks(prev => [...prev, { ...taskToInsert, id: tempId, due_date: null }]);
+    setNewTask({ title: '', description: '' });
+
+    const { data, error } = await supabase.from('tasks').insert(taskToInsert).select().single();
+
+    if (data) {
+      setTasks(prev => prev.map(t => t.id === tempId ? data : t));
+    } else {
+      setTasks(prev => prev.filter(t => t.id !== tempId)); // Rollback
+      console.error('Insert error:', error);
+      alert(`Erro Supabase: ${error?.message || error?.details || JSON.stringify(error)}`);
+    }
+    setIsAdding(false);
+  };
+
+  const deleteTask = async (id: string) => {
+    const backup = [...tasks];
+    setTasks(prev => prev.filter(t => t.id !== id)); // Optimistic delete
+
+    const { error } = await supabase.from('tasks').delete().eq('id', id);
+    if (error) setTasks(backup); // Rollback
+  };
+
+  const onDragEnd = async (result: DropResult) => {
+    const { source, destination, draggableId } = result;
+
+    if (!destination) return;
+    if (source.droppableId === destination.droppableId && source.index === destination.index) return;
+
+    const sourceStatus = source.droppableId as TaskStatus;
+    const destStatus = destination.droppableId as TaskStatus;
+
+    // Build new arrays
+    const sourceTasks = tasks.filter(t => t.status === sourceStatus).sort((a, b) => a.order_index - b.order_index);
+    const destTasks = sourceStatus === destStatus
+      ? sourceTasks
+      : tasks.filter(t => t.status === destStatus).sort((a, b) => a.order_index - b.order_index);
+
+    const taskToMove = tasks.find(t => t.id === draggableId)!;
+
+    // Optimistic State Update
+    const allOtherTasks = tasks.filter(t => t.status !== sourceStatus && t.status !== destStatus);
+
+    sourceTasks.splice(source.index, 1);
+    const modifiedTask = { ...taskToMove, status: destStatus };
+    destTasks.splice(destination.index, 0, modifiedTask);
+
+    // Recalculate order_index
+    const updatedSource = sourceTasks.map((t, idx) => ({ ...t, order_index: idx }));
+    const updatedDest = destTasks.map((t, idx) => ({ ...t, order_index: idx }));
+
+    const newTasks = sourceStatus === destStatus
+      ? [...allOtherTasks, ...updatedDest]
+      : [...allOtherTasks, ...updatedSource, ...updatedDest];
+
+    setTasks(newTasks); // Apply instantly
+
+    // Real DB Update
+    try {
+      if (sourceStatus !== destStatus) {
+        await supabase.from('tasks').update({ status: destStatus, order_index: destination.index }).eq('id', draggableId);
+      }
+
+      const updates = (sourceStatus === destStatus ? updatedDest : [...updatedSource, ...updatedDest])
+        .map(t => ({
+          id: t.id,
+          title: t.title,
+          status: t.status,
+          order_index: t.order_index,
+          user_id: session.user.id
+        }));
+
+      await supabase.from('tasks').upsert(updates);
+    } catch (err) {
+      console.error("Falha ao salvar ordem no DB", err);
+      // Aqui faríamos rollback recarregando os dados reais
+      fetchTasks(session.user.id);
+    }
+  };
+
+  // --- Derived Stats ---
   const stats = useMemo(() => {
-    const todo = tasks.filter(t => t.status === 'A Fazer').length;
-    const doing = tasks.filter(t => t.status === 'Em Progresso').length;
-    const done = tasks.filter(t => t.status === 'Concluído').length;
-    
-    const byCategory = tasks.reduce((acc: any, task) => {
-      acc[task.category] = (acc[task.category] || 0) + 1;
-      return acc;
-    }, {});
+    const backlog = tasks.filter(t => t.status === 'backlog').length;
+    const todo = tasks.filter(t => t.status === 'todo').length;
+    const doing = tasks.filter(t => t.status === 'doing').length;
+    const done = tasks.filter(t => t.status === 'done').length;
 
     const chartData = [
+      { name: 'Backlog', total: backlog },
       { name: 'A Fazer', total: todo },
       { name: 'Em Progresso', total: doing },
       { name: 'Concluído', total: done },
     ];
 
-    const pieData = Object.keys(byCategory).map(cat => ({
-      name: cat,
-      value: byCategory[cat]
-    }));
+    const pieData = chartData.filter(d => d.total > 0).map(d => ({ name: d.name, value: d.total }));
 
-    return { todo, doing, done, chartData, pieData, total: tasks.length };
+    return { backlog, todo, doing, done, chartData, pieData, total: tasks.length };
   }, [tasks]);
 
-  const handleAddTask = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!newTask.title) return;
+  // --- Auth UI Wrapper ---
+  if (loadingSession) {
+    return <div className="min-h-screen flex items-center justify-center bg-zinc-50 dark:bg-black"><Loader2 className="w-8 h-8 animate-spin text-zinc-400" /></div>;
+  }
 
-    setIsThinking(true);
-    
-    // Simulate AI processing
-    setTimeout(() => {
-      const task: Task = {
-        id: Math.random().toString(36).substr(2, 9),
-        title: newTask.title,
-        description: newTask.description || 'Tarefa gerada automaticamente.',
-        status: 'A Fazer',
-        priority: 'Média',
-        category: newTask.category,
-        date: new Date().toISOString().split('T')[0],
-      };
-      setTasks(prev => [task, ...prev]);
-      setNewTask({ title: '', description: '', category: 'Operacional' });
-      setIsThinking(false);
-    }, 2000);
-  };
+  if (!session) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-zinc-50 dark:bg-black p-4">
+        <div className="bg-white dark:bg-zinc-900 w-full max-w-md p-8 rounded-3xl border border-zinc-200 dark:border-zinc-800 shadow-xl">
+          <div className="flex items-center gap-2 mb-8 justify-center">
+            <div className="w-10 h-10 bg-zinc-900 dark:bg-white rounded-lg flex items-center justify-center">
+              <Kanban className="w-6 h-6 text-white dark:text-black" />
+            </div>
+            <h1 className="text-2xl font-bold dark:text-white">GestãoPro Lojista</h1>
+          </div>
 
-  const moveTask = (id: string, newStatus: TaskStatus) => {
-    setTasks(prev => prev.map(t => t.id === id ? { ...t, status: newStatus } : t));
-  };
+          <form className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Email</label>
+              <input
+                type="email"
+                className="w-full px-4 py-3 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-xl focus:ring-2 focus:ring-zinc-900 dark:focus:ring-white outline-none dark:text-white"
+                value={email} onChange={e => setEmail(e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1 dark:text-zinc-300">Senha</label>
+              <input
+                type="password"
+                className="w-full px-4 py-3 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-xl focus:ring-2 focus:ring-zinc-900 dark:focus:ring-white outline-none dark:text-white"
+                value={password} onChange={e => setPassword(e.target.value)}
+              />
+            </div>
 
-  const deleteTask = (id: string) => {
-    setTasks(prev => prev.filter(t => t.id !== id));
-  };
+            {authError && <p className="text-red-500 text-sm">{authError}</p>}
 
+            <div className="flex gap-4 pt-4">
+              <button
+                type="button"
+                onClick={(e) => handleLogin(e, false)}
+                disabled={authLoading}
+                className="flex-1 bg-zinc-900 dark:bg-white text-white dark:text-black py-3 rounded-xl font-bold hover:opacity-90 disabled:opacity-50 transition-opacity"
+              >
+                Entrar
+              </button>
+              <button
+                type="button"
+                onClick={(e) => handleLogin(e, true)}
+                disabled={authLoading}
+                className="flex-1 bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white py-3 rounded-xl font-bold hover:bg-zinc-200 dark:hover:bg-zinc-700 disabled:opacity-50 transition-colors"
+              >
+                Criar Conta
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
+  // --- Main App UI ---
   return (
     <div className={`${isDarkMode ? 'dark' : ''} min-h-screen transition-colors duration-300`}>
       <div className="bg-zinc-50 dark:bg-black text-zinc-900 dark:text-zinc-100 min-h-screen font-sans">
-        
+
         {/* --- Header --- */}
         <header className="sticky top-0 z-50 bg-white/80 dark:bg-black/80 backdrop-blur-md border-b border-zinc-200 dark:border-zinc-800">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 bg-zinc-900 dark:bg-white rounded-lg flex items-center justify-center">
-                <LayoutDashboard className="w-5 h-5 text-white dark:text-black" />
+                <Kanban className="w-5 h-5 text-white dark:text-black" />
               </div>
-              <div>
-                <h1 className="text-lg font-bold tracking-tight">GestãoPro Lojista</h1>
-                <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold">Organize seu comércio</p>
+              <div className="hidden sm:block">
+                <h1 className="text-lg font-bold tracking-tight">GestãoPro Kanban</h1>
+                <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-semibold">{session.user.email}</p>
               </div>
             </div>
 
-            <nav className="hidden md:flex items-center gap-1 bg-zinc-100 dark:bg-zinc-900 p-1 rounded-xl">
-              <button 
+            <nav className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-900 p-1 rounded-xl">
+              <button
                 onClick={() => setActiveTab('dashboard')}
                 className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'dashboard' ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-white' : 'text-zinc-500 hover:text-zinc-700'}`}
               >
                 Dashboard
               </button>
-              <button 
+              <button
                 onClick={() => setActiveTab('kanban')}
                 className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'kanban' ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-white' : 'text-zinc-500 hover:text-zinc-700'}`}
               >
-                Pipeline Kanban
+                Kanban
               </button>
             </nav>
 
             <div className="flex items-center gap-3">
-              <button 
-                onClick={() => setIsDarkMode(!isDarkMode)}
-                className="p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors"
-              >
+              <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors">
                 {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
               </button>
-              <div className="w-8 h-8 rounded-full bg-zinc-200 dark:bg-zinc-800 flex items-center justify-center overflow-hidden border border-zinc-300 dark:border-zinc-700 relative">
-                <Image 
-                  src="https://picsum.photos/seed/shopkeeper/100/100" 
-                  alt="User" 
-                  fill
-                  className="object-cover"
-                  referrerPolicy="no-referrer"
-                />
-              </div>
+              <button onClick={handleLogout} className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors">
+                <LogOut className="w-5 h-5" />
+              </button>
             </div>
           </div>
         </header>
 
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          
+
           {/* --- Input Section --- */}
           <section className="mb-12">
             <div className="bg-white dark:bg-zinc-900 p-8 rounded-3xl border border-zinc-200 dark:border-zinc-800 shadow-xl relative overflow-hidden">
-              <div className="absolute top-0 right-0 w-64 h-64 bg-zinc-100 dark:bg-zinc-800/50 rounded-full -mr-32 -mt-32 blur-3xl opacity-50"></div>
-              
-              <div className="relative">
-                <h2 className="text-2xl font-bold mb-2">O que temos para hoje?</h2>
-                <p className="text-zinc-500 dark:text-zinc-400 mb-6">Descreva sua tarefa e nossa IA ajudará a organizar seu pipeline.</p>
-                
-                <form onSubmit={handleAddTask} className="space-y-4">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="md:col-span-2">
-                      <input 
-                        type="text" 
-                        placeholder="Ex: Fazer pedido de reposição de laticínios..."
-                        className="w-full px-4 py-3 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-white transition-all"
-                        value={newTask.title}
-                        onChange={(e) => setNewTask({...newTask, title: e.target.value})}
-                      />
-                    </div>
-                    <select 
-                      className="px-4 py-3 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none"
-                      value={newTask.category}
-                      onChange={(e) => setNewTask({...newTask, category: e.target.value as any})}
-                    >
-                      <option value="Estoque">Estoque</option>
-                      <option value="Financeiro">Financeiro</option>
-                      <option value="Marketing">Marketing</option>
-                      <option value="Operacional">Operacional</option>
-                    </select>
+              <div className="absolute top-0 right-0 w-64 h-64 bg-zinc-100 dark:bg-zinc-800/50 rounded-full -mr-32 -mt-32 blur-3xl opacity-50 pointer-events-none"></div>
+
+              <div className="relative z-10">
+                <h2 className="text-xl md:text-2xl font-bold mb-2">Adicionar Nova Tarefa</h2>
+                <form onSubmit={handleAddTask} className="flex flex-col md:flex-row gap-4 mt-6">
+                  <div className="flex-1 space-y-4">
+                    <input
+                      type="text"
+                      placeholder="Título da tarefa..."
+                      className="w-full px-4 py-3 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-white transition-all"
+                      value={newTask.title}
+                      onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
+                    />
+                    <input
+                      type="text"
+                      placeholder="Descrição (opcional)..."
+                      className="w-full px-4 py-3 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-white transition-all"
+                      value={newTask.description}
+                      onChange={(e) => setNewTask({ ...newTask, description: e.target.value })}
+                    />
                   </div>
-                  <textarea 
-                    placeholder="Detalhes adicionais (opcional)..."
-                    className="w-full px-4 py-3 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none h-24 resize-none"
-                    value={newTask.description}
-                    onChange={(e) => setNewTask({...newTask, description: e.target.value})}
-                  ></textarea>
-                  
-                  <button 
-                    disabled={isThinking || !newTask.title}
-                    className="w-full md:w-auto px-8 py-3 bg-zinc-900 dark:bg-white text-white dark:text-black font-bold rounded-xl hover:opacity-90 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                  <button
+                    disabled={isAdding || !newTask.title}
+                    className="md:w-48 px-8 py-3 bg-zinc-900 dark:bg-white text-white dark:text-black font-bold rounded-xl hover:opacity-90 transition-all flex items-center justify-center gap-2 disabled:opacity-50 h-[120px]"
                   >
-                    {isThinking ? (
-                      <>
-                        <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin"></div>
-                        Processando...
-                      </>
-                    ) : (
-                      <>
-                        <Plus className="w-5 h-5" />
-                        Adicionar Tarefa
-                      </>
-                    )}
+                    {isAdding ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Plus className="w-5 h-5" /> Adicionar</>}
                   </button>
                 </form>
               </div>
@@ -300,193 +377,117 @@ export default function PlannerApp() {
           </section>
 
           {/* --- Content Tabs --- */}
-          <AnimatePresence mode="wait">
-            {activeTab === 'dashboard' ? (
-              <motion.div 
-                key="dashboard"
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -20 }}
-                className="space-y-8"
-              >
-                {/* Stats Grid */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  <StatCard title="Total de Tarefas" value={stats.total} icon={Kanban} color="bg-zinc-900 dark:bg-zinc-700" />
-                  <StatCard title="A Fazer" value={stats.todo} icon={Clock} color="bg-blue-500" />
-                  <StatCard title="Em Progresso" value={stats.doing} icon={TrendingUp} color="bg-amber-500" />
-                  <StatCard title="Concluídas" value={stats.done} icon={CheckCircle2} color="bg-emerald-500" />
-                </div>
-
-                {/* Charts Grid */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-                  <div className="bg-white dark:bg-zinc-900 p-8 rounded-3xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-                    <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
-                      <TrendingUp className="w-5 h-5 text-blue-500" />
-                      Status das Tarefas
-                    </h3>
-                    <div className="h-64">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={stats.chartData}>
-                          <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDarkMode ? '#333' : '#eee'} />
-                          <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: isDarkMode ? '#888' : '#666', fontSize: 12}} />
-                          <YAxis axisLine={false} tickLine={false} tick={{fill: isDarkMode ? '#888' : '#666', fontSize: 12}} />
-                          <Tooltip 
-                            contentStyle={{backgroundColor: isDarkMode ? '#18181b' : '#fff', border: 'none', borderRadius: '12px', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)'}}
-                            itemStyle={{color: isDarkMode ? '#fff' : '#000'}}
-                          />
-                          <Bar dataKey="total" fill="#3b82f6" radius={[6, 6, 0, 0]} barSize={40} />
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
-                  </div>
-
-                  <div className="bg-white dark:bg-zinc-900 p-8 rounded-3xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-                    <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
-                      <Package className="w-5 h-5 text-emerald-500" />
-                      Distribuição por Categoria
-                    </h3>
-                    <div className="h-64 flex items-center justify-center">
-                      <ResponsiveContainer width="100%" height="100%">
-                        <PieChart>
-                          <Pie
-                            data={stats.pieData}
-                            cx="50%"
-                            cy="50%"
-                            innerRadius={60}
-                            outerRadius={80}
-                            paddingAngle={5}
-                            dataKey="value"
-                          >
-                            {stats.pieData.map((entry, index) => (
-                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                            ))}
-                          </Pie>
-                          <Tooltip 
-                            contentStyle={{backgroundColor: isDarkMode ? '#18181b' : '#fff', border: 'none', borderRadius: '12px'}}
-                          />
-                        </PieChart>
-                      </ResponsiveContainer>
-                      <div className="flex flex-col gap-2 ml-4">
-                        {stats.pieData.map((entry, index) => (
-                          <div key={entry.name} className="flex items-center gap-2">
-                            <div className="w-3 h-3 rounded-full" style={{backgroundColor: COLORS[index % COLORS.length]}}></div>
-                            <span className="text-xs text-zinc-500">{entry.name}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </motion.div>
-            ) : (
-              <motion.div 
-                key="kanban"
-                initial={{ opacity: 0, x: 20 }}
-                animate={{ opacity: 1, x: 0 }}
-                exit={{ opacity: 0, x: -20 }}
-                className="grid grid-cols-1 md:grid-cols-3 gap-6"
-              >
-                {(['A Fazer', 'Em Progresso', 'Concluído'] as TaskStatus[]).map(status => (
-                  <div key={status} className="flex flex-col gap-4">
-                    <div className="flex items-center justify-between px-2">
-                      <div className="flex items-center gap-2">
-                        <h3 className="font-bold text-zinc-900 dark:text-white">{status}</h3>
-                        <span className="bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 text-[10px] px-2 py-0.5 rounded-full font-bold">
-                          {tasks.filter(t => t.status === status).length}
-                        </span>
-                      </div>
-                      <button className="p-1 hover:bg-zinc-100 dark:hover:bg-zinc-900 rounded-md">
-                        <MoreVertical className="w-4 h-4 text-zinc-400" />
-                      </button>
-                    </div>
-
-                    <div className="flex flex-col gap-3 min-h-[500px] bg-zinc-100/50 dark:bg-zinc-900/30 p-3 rounded-2xl border border-dashed border-zinc-200 dark:border-zinc-800">
-                      {tasks.filter(t => t.status === status).map(task => (
-                        <motion.div 
-                          layout
-                          key={task.id}
-                          className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm group relative"
-                        >
-                          <div className="flex items-start justify-between mb-2">
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${
-                              task.category === 'Estoque' ? 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400' :
-                              task.category === 'Financeiro' ? 'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/30 dark:text-emerald-400' :
-                              task.category === 'Marketing' ? 'bg-purple-100 text-purple-600 dark:bg-purple-900/30 dark:text-purple-400' :
-                              'bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-400'
-                            }`}>
-                              {task.category}
-                            </span>
-                            <div className="flex items-center gap-1">
-                              <button 
-                                onClick={() => deleteTask(task.id)}
-                                className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 dark:hover:bg-red-900/30 text-red-500 rounded-md transition-all"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </div>
-                          
-                          <h4 className="font-bold text-sm mb-1">{task.title}</h4>
-                          <p className="text-xs text-zinc-500 dark:text-zinc-400 line-clamp-2 mb-4">{task.description}</p>
-                          
-                          <div className="flex items-center justify-between mt-auto">
-                            <div className="flex items-center gap-1.5 text-zinc-400">
-                              <Clock className="w-3 h-3" />
-                              <span className="text-[10px] font-medium">{task.date}</span>
-                            </div>
-                            
-                            <div className="flex items-center gap-1">
-                              {status !== 'A Fazer' && (
-                                <button 
-                                  onClick={() => moveTask(task.id, status === 'Concluído' ? 'Em Progresso' : 'A Fazer')}
-                                  className="p-1.5 bg-zinc-100 dark:bg-zinc-800 rounded-lg hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
-                                >
-                                  <ChevronRight className="w-3.5 h-3.5 rotate-180" />
-                                </button>
-                              )}
-                              {status !== 'Concluído' && (
-                                <button 
-                                  onClick={() => moveTask(task.id, status === 'A Fazer' ? 'Em Progresso' : 'Concluído')}
-                                  className="p-1.5 bg-zinc-900 dark:bg-white text-white dark:text-black rounded-lg hover:opacity-80 transition-colors"
-                                >
-                                  <ChevronRight className="w-3.5 h-3.5" />
-                                </button>
-                              )}
-                            </div>
-                          </div>
-                        </motion.div>
-                      ))}
-                      
-                      {tasks.filter(t => t.status === status).length === 0 && (
-                        <div className="flex flex-col items-center justify-center py-12 text-zinc-400">
-                          <AlertCircle className="w-8 h-8 mb-2 opacity-20" />
-                          <p className="text-xs font-medium opacity-50">Nenhuma tarefa aqui</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </main>
-
-        {/* --- Footer --- */}
-        <footer className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 border-t border-zinc-200 dark:border-zinc-800 mt-12">
-          <div className="flex flex-col md:flex-row items-center justify-between gap-6">
-            <div className="flex items-center gap-2 opacity-50">
-              <div className="w-6 h-6 bg-zinc-900 dark:bg-white rounded flex items-center justify-center">
-                <LayoutDashboard className="w-4 h-4 text-white dark:text-black" />
+          {activeTab === 'dashboard' ? (
+            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <StatCard title="Backlog" value={stats.backlog} icon={Clock} color="bg-zinc-500" />
+                <StatCard title="A Fazer" value={stats.todo} icon={Package} color="bg-blue-500" />
+                <StatCard title="Fazendo" value={stats.doing} icon={TrendingUp} color="bg-amber-500" />
+                <StatCard title="Concluídas" value={stats.done} icon={CheckCircle2} color="bg-emerald-500" />
               </div>
-              <span className="text-sm font-bold">GestãoPro Lojista</span>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                <div className="bg-white dark:bg-zinc-900 p-8 rounded-3xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+                  <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
+                    <TrendingUp className="w-5 h-5 text-blue-500" /> Visão Geral
+                  </h3>
+                  <div className="h-64">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={stats.chartData}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke={isDarkMode ? '#333' : '#eee'} />
+                        <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{ fill: isDarkMode ? '#888' : '#666', fontSize: 12 }} />
+                        <Tooltip contentStyle={{ backgroundColor: isDarkMode ? '#18181b' : '#fff', borderRadius: '12px' }} />
+                        <Bar dataKey="total" fill="#3b82f6" radius={[6, 6, 0, 0]} barSize={40} />
+                      </BarChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              </div>
             </div>
-            <p className="text-xs text-zinc-500">© 2026 GestãoPro - O braço direito do pequeno lojista brasileiro.</p>
-            <div className="flex items-center gap-4">
-              <a href="#" className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-white underline underline-offset-4">Privacidade</a>
-              <a href="#" className="text-xs text-zinc-500 hover:text-zinc-900 dark:hover:text-white underline underline-offset-4">Termos</a>
+          ) : (
+            <div className="animate-in fade-in slide-in-from-right-4 duration-500 overflow-x-auto pb-4">
+              <DragDropContext onDragEnd={onDragEnd}>
+                <div className="flex gap-6 min-w-max">
+                  {COLUMNS.map((status) => {
+                    const columnTasks = tasks.filter(t => t.status === status).sort((a, b) => a.order_index - b.order_index);
+
+                    return (
+                      <div key={status} className="w-80 flex flex-col flex-shrink-0">
+                        <div className="flex items-center justify-between mb-4 px-2">
+                          <h3 className="font-bold text-zinc-900 dark:text-white uppercase tracking-wider text-sm flex items-center gap-2">
+                            <span className={`w-2 h-2 rounded-full ${status === 'done' ? 'bg-emerald-500' :
+                                status === 'doing' ? 'bg-amber-500' :
+                                  status === 'todo' ? 'bg-blue-500' : 'bg-zinc-500'
+                              }`} />
+                            {STATUS_MAP[status]}
+                          </h3>
+                          <span className="bg-zinc-200 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-400 text-xs px-2 py-0.5 rounded-full font-bold">
+                            {columnTasks.length}
+                          </span>
+                        </div>
+
+                        <Droppable droppableId={status}>
+                          {(provided, snapshot) => (
+                            <div
+                              ref={provided.innerRef}
+                              {...provided.droppableProps}
+                              className={`flex flex-col gap-3 min-h-[500px] bg-zinc-100/50 dark:bg-zinc-900/30 p-2.5 rounded-2xl border transition-colors ${snapshot.isDraggingOver ? 'border-zinc-300 dark:border-zinc-700 bg-zinc-200/50 dark:bg-zinc-800/50' : 'border-dashed border-zinc-200 dark:border-zinc-800'
+                                }`}
+                            >
+                              {columnTasks.map((task, index) => (
+                                <Draggable key={task.id} draggableId={task.id} index={index}>
+                                  {(provided, snapshot) => (
+                                    <div
+                                      ref={provided.innerRef}
+                                      {...provided.draggableProps}
+                                      {...provided.dragHandleProps}
+                                      className={`bg-white dark:bg-zinc-900 p-4 rounded-xl shadow-sm border group relative ${snapshot.isDragging ? 'shadow-xl border-blue-500 rotate-2 z-50' : 'border-zinc-200 dark:border-zinc-800'
+                                        }`}
+                                    >
+                                      <div className="flex items-start justify-between mb-2">
+                                        <h4 className="font-bold text-sm text-zinc-900 dark:text-zinc-100 pr-6 leading-tight">{task.title}</h4>
+                                        <button
+                                          onClick={() => deleteTask(task.id)}
+                                          className="absolute right-3 top-3 opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 dark:hover:bg-red-900/30 text-red-500 rounded-md transition-all"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+
+                                      {task.description && (
+                                        <p className="text-xs text-zinc-500 dark:text-zinc-400 line-clamp-3 mb-3">
+                                          {task.description}
+                                        </p>
+                                      )}
+
+                                      <div className="flex items-center justify-between mt-auto opacity-60">
+                                        <div className="flex items-center gap-1 text-zinc-500 text-[10px] font-medium font-mono bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded">
+                                          #{task.order_index}
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                </Draggable>
+                              ))}
+                              {provided.placeholder}
+
+                              {columnTasks.length === 0 && !snapshot.isDraggingOver && (
+                                <div className="flex flex-col items-center justify-center py-12 text-zinc-400">
+                                  <AlertCircle className="w-6 h-6 mb-2 opacity-20" />
+                                  <p className="text-[10px] font-medium uppercase tracking-widest opacity-50">Vazio</p>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </Droppable>
+                      </div>
+                    )
+                  })}
+                </div>
+              </DragDropContext>
             </div>
-          </div>
-        </footer>
+          )}
+        </main>
       </div>
     </div>
   );
