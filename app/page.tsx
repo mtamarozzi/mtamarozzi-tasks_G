@@ -248,7 +248,7 @@ export default function PlannerApp() {
             <div className="w-10 h-10 bg-zinc-900 dark:bg-white rounded-lg flex items-center justify-center">
               <Kanban className="w-6 h-6 text-white dark:text-black" />
             </div>
-            <h1 className="text-2xl font-bold dark:text-white">GestãoPro Lojista</h1>
+            <h1 className="text-2xl font-bold dark:text-white">GestãoPro</h1>
           </div>
 
           <form className="space-y-4">
@@ -407,12 +407,12 @@ export default function PlannerApp() {
           ) : (
             <div className="animate-in fade-in slide-in-from-right-4 duration-500 overflow-x-auto pb-4">
               <DragDropContext onDragEnd={onDragEnd}>
-                <div className="flex gap-6 min-w-max">
+                <div className="flex gap-4 lg:gap-6 w-full min-w-min">
                   {COLUMNS.map((status) => {
                     const columnTasks = tasks.filter(t => t.status === status).sort((a, b) => a.order_index - b.order_index);
 
                     return (
-                      <div key={status} className="w-80 flex flex-col flex-shrink-0">
+                      <div key={status} className="flex-1 min-w-[250px] flex flex-col flex-shrink-0">
                         <div className="flex items-center justify-between mb-4 px-2">
                           <h3 className="font-bold text-zinc-900 dark:text-white uppercase tracking-wider text-sm flex items-center gap-2">
                             <span className={`w-2 h-2 rounded-full ${status === 'done' ? 'bg-emerald-500' :
