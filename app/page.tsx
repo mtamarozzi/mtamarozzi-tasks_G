@@ -4,8 +4,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { DragDropContext, Droppable, Draggable, DropResult } from '@hello-pangea/dnd';
 import {
   LayoutDashboard, Kanban, Plus, Moon, Sun, CheckCircle2,
-  Clock, AlertCircle, MoreVertical, Trash2, ChevronRight,
-  TrendingUp, Package, LogOut, Loader2
+  Clock, AlertCircle, MoreVertical, Trash2, Edit2, X, ChevronRight,
+  TrendingUp, Package, LogOut, Loader2, Calendar, Search
 } from 'lucide-react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
@@ -25,6 +25,7 @@ interface Task {
   order_index: number;
   due_date: string | null;
   user_id?: string;
+  priority?: 'low' | 'medium' | 'high';
 }
 
 const STATUS_MAP: Record<TaskStatus, string> = {
@@ -39,14 +40,14 @@ const COLORS = ['#3b82f6', '#f59e0b', '#10b981', '#ef4444'];
 
 // --- Components ---
 const StatCard = ({ title, value, icon: Icon, color }: any) => (
-  <div className="bg-white dark:bg-zinc-900 p-6 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
-    <div className="flex items-center justify-between mb-4">
-      <div className={`p-2 rounded-lg ${color}`}>
-        <Icon className="w-5 h-5 text-white" />
+  <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+    <div className="flex items-center justify-between mb-3">
+      <div className={`p-1.5 rounded-md ${color}`}>
+        <Icon className="w-4 h-4 text-white" />
       </div>
-      <span className="text-xs font-medium text-zinc-400 uppercase tracking-wider">{title}</span>
+      <span className="text-[10px] font-medium text-zinc-400 uppercase tracking-wider">{title}</span>
     </div>
-    <div className="text-2xl font-bold text-zinc-900 dark:text-white">{value}</div>
+    <div className="text-xl font-bold text-zinc-900 dark:text-white">{value}</div>
   </div>
 );
 
@@ -64,8 +65,39 @@ export default function PlannerApp() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [isDarkMode, setIsDarkMode] = useState(false);
   const [activeTab, setActiveTab] = useState<'dashboard' | 'kanban'>('dashboard');
-  const [newTask, setNewTask] = useState({ title: '', description: '' });
+  const [newTask, setNewTask] = useState({ title: '', description: '', priority: 'medium' as 'low' | 'medium' | 'high', due_date: '', status: 'backlog' as TaskStatus });
   const [isAdding, setIsAdding] = useState(false);
+  
+  // Theme State Persistence
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const savedTheme = localStorage.getItem('gestaopro-theme');
+      if (savedTheme === 'dark') {
+        setIsDarkMode(true);
+      } else if (savedTheme === 'light') {
+        setIsDarkMode(false);
+      } else {
+        setIsDarkMode(window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      }
+    }
+  }, []);
+
+  const toggleTheme = () => {
+    setIsDarkMode(prev => {
+      const newTheme = !prev;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('gestaopro-theme', newTheme ? 'dark' : 'light');
+      }
+      return newTheme;
+    });
+  };
+
+  // Edit State
+  const [editingTask, setEditingTask] = useState<Task | null>(null);
+  const [editForm, setEditForm] = useState({ title: '', description: '', priority: 'medium' as 'low' | 'medium' | 'high', due_date: '' });
+
+  // Search State
+  const [searchQuery, setSearchQuery] = useState('');
 
   // --- Auth & Initial Fetch ---
   useEffect(() => {
@@ -122,22 +154,24 @@ export default function PlannerApp() {
     if (!newTask.title || !session) return;
     setIsAdding(true);
 
+    const targetStatus = newTask.status || 'backlog';
     const maxOrder = tasks
-      .filter(t => t.status === 'backlog')
+      .filter(t => t.status === targetStatus)
       .reduce((max, t) => Math.max(max, t.order_index), -1);
 
     const taskToInsert = {
       title: newTask.title,
       description: newTask.description,
-      status: 'backlog' as TaskStatus,
+      status: targetStatus,
       order_index: maxOrder + 1,
-      user_id: session.user.id
+      user_id: session.user.id,
+      priority: newTask.priority
     };
 
     // Optimistic Update
-    const tempId = Math.random().toString();
-    setTasks(prev => [...prev, { ...taskToInsert, id: tempId, due_date: null }]);
-    setNewTask({ title: '', description: '' });
+    const tempId = crypto.randomUUID();
+    setTasks(prev => [...prev, { ...taskToInsert, id: tempId, due_date: newTask.due_date || null }]);
+    setNewTask({ title: '', description: '', priority: 'medium' as 'low' | 'medium' | 'high', due_date: '', status: 'backlog' as TaskStatus });
 
     const { data, error } = await supabase.from('tasks').insert(taskToInsert).select().single();
 
@@ -157,6 +191,42 @@ export default function PlannerApp() {
 
     const { error } = await supabase.from('tasks').delete().eq('id', id);
     if (error) setTasks(backup); // Rollback
+  };
+
+  const openEditModal = (task: Task) => {
+    setEditingTask(task);
+    setEditForm({
+      title: task.title,
+      description: task.description || '',
+      priority: task.priority || 'medium',
+      due_date: task.due_date ? task.due_date.substring(0, 10) : ''
+    });
+  };
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTask || !editForm.title) return;
+
+    const updatePayload = {
+      ...editForm,
+      due_date: editForm.due_date || null
+    };
+
+    const previousTasks = [...tasks];
+    setTasks(prev => prev.map(t => t.id === editingTask.id ? { ...t, ...updatePayload } : t)); // Optimistic
+
+    const { error } = await supabase
+      .from('tasks')
+      .update(updatePayload)
+      .eq('id', editingTask.id);
+
+    if (error) {
+      console.error(error);
+      alert('Erro ao atualizar. Voltando ao estado original.');
+      setTasks(previousTasks); // Rollback
+    }
+
+    setEditingTask(null);
   };
 
   const onDragEnd = async (result: DropResult) => {
@@ -216,12 +286,25 @@ export default function PlannerApp() {
     }
   };
 
-  // --- Derived Stats ---
+  // --- Derived Stats & Filtering ---
+  const filteredTasks = useMemo(() => {
+    if (!searchQuery.trim()) return tasks;
+    const query = searchQuery.toLowerCase();
+    return tasks.filter(t => 
+      t.title.toLowerCase().includes(query) || 
+      (t.description && t.description.toLowerCase().includes(query))
+    );
+  }, [tasks, searchQuery]);
+
   const stats = useMemo(() => {
-    const backlog = tasks.filter(t => t.status === 'backlog').length;
-    const todo = tasks.filter(t => t.status === 'todo').length;
-    const doing = tasks.filter(t => t.status === 'doing').length;
-    const done = tasks.filter(t => t.status === 'done').length;
+    const backlog = filteredTasks.filter(t => t.status === 'backlog').length;
+    const todo = filteredTasks.filter(t => t.status === 'todo').length;
+    const doing = filteredTasks.filter(t => t.status === 'doing').length;
+    const done = filteredTasks.filter(t => t.status === 'done').length;
+
+    const today = new Date();
+    today.setHours(0,0,0,0);
+    const overdue = filteredTasks.filter(t => t.due_date && t.status !== 'done' && new Date(t.due_date.substring(0, 10) + 'T00:00:00') < today).length;
 
     const chartData = [
       { name: 'Backlog', total: backlog },
@@ -232,8 +315,8 @@ export default function PlannerApp() {
 
     const pieData = chartData.filter(d => d.total > 0).map(d => ({ name: d.name, value: d.total }));
 
-    return { backlog, todo, doing, done, chartData, pieData, total: tasks.length };
-  }, [tasks]);
+    return { backlog, todo, doing, done, overdue, chartData, pieData, total: filteredTasks.length };
+  }, [filteredTasks]);
 
   // --- Auth UI Wrapper ---
   if (loadingSession) {
@@ -313,6 +396,19 @@ export default function PlannerApp() {
               </div>
             </div>
 
+            <div className="flex-1 max-w-md mx-8 hidden md:block">
+              <div className="relative group">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400 group-focus-within:text-zinc-600 dark:group-focus-within:text-zinc-300 transition-colors" />
+                <input
+                  type="text"
+                  placeholder="Pesquisar tarefas..."
+                  className="w-full pl-10 pr-4 py-2 bg-zinc-100 dark:bg-zinc-900 border-none rounded-xl text-sm focus:ring-1 focus:ring-zinc-300 dark:focus:ring-zinc-700 outline-none transition-all"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </div>
+            </div>
+
             <nav className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-900 p-1 rounded-xl">
               <button
                 onClick={() => setActiveTab('dashboard')}
@@ -329,7 +425,7 @@ export default function PlannerApp() {
             </nav>
 
             <div className="flex items-center gap-3">
-              <button onClick={() => setIsDarkMode(!isDarkMode)} className="p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors">
+              <button onClick={toggleTheme} className="p-2 rounded-full hover:bg-zinc-100 dark:hover:bg-zinc-900 transition-colors">
                 {isDarkMode ? <Sun className="w-5 h-5" /> : <Moon className="w-5 h-5" />}
               </button>
               <button onClick={handleLogout} className="p-2 text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-full transition-colors">
@@ -342,35 +438,63 @@ export default function PlannerApp() {
         <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
 
           {/* --- Input Section --- */}
-          <section className="mb-12">
-            <div className="bg-white dark:bg-zinc-900 p-8 rounded-3xl border border-zinc-200 dark:border-zinc-800 shadow-xl relative overflow-hidden">
+          <section className="mb-8">
+            <div className="bg-white dark:bg-zinc-900 p-5 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm relative overflow-hidden">
               <div className="absolute top-0 right-0 w-64 h-64 bg-zinc-100 dark:bg-zinc-800/50 rounded-full -mr-32 -mt-32 blur-3xl opacity-50 pointer-events-none"></div>
 
               <div className="relative z-10">
-                <h2 className="text-xl md:text-2xl font-bold mb-2">Adicionar Nova Tarefa</h2>
-                <form onSubmit={handleAddTask} className="flex flex-col md:flex-row gap-4 mt-6">
-                  <div className="flex-1 space-y-4">
+                <h2 className="text-sm font-bold text-zinc-800 dark:text-zinc-200 uppercase tracking-wider mb-4">Adicionar Nova Tarefa</h2>
+                <form onSubmit={handleAddTask} className="flex flex-col gap-3">
+                  <div className="flex flex-col md:flex-row gap-2">
                     <input
                       type="text"
                       placeholder="Título da tarefa..."
-                      className="w-full px-4 py-3 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-white transition-all"
+                      className="flex-1 px-3 py-2 text-sm bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:focus:ring-white transition-all"
                       value={newTask.title}
                       onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
                     />
+                    <select
+                      className="px-3 py-2 text-sm bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:focus:ring-white transition-all text-zinc-600 dark:text-zinc-300 md:w-32"
+                      value={newTask.priority}
+                      onChange={(e) => setNewTask({ ...newTask, priority: e.target.value as any })}
+                    >
+                      <option value="low">🟢 Baixa</option>
+                      <option value="medium">🟡 Média</option>
+                      <option value="high">🔴 Alta</option>
+                    </select>
+                    <input
+                      type="date"
+                      className="px-3 py-2 text-sm bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:focus:ring-white transition-all text-zinc-600 dark:text-zinc-300 md:w-40 uppercase"
+                      value={newTask.due_date}
+                      onChange={(e) => setNewTask({ ...newTask, due_date: e.target.value })}
+                    />
+                    <button
+                      disabled={isAdding || !newTask.title}
+                      className="md:w-32 py-2 bg-zinc-900 dark:bg-white text-white dark:text-black text-sm font-bold rounded-lg hover:opacity-90 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                    >
+                      {isAdding ? <Loader2 className="w-4 h-4 animate-spin" /> : <><Plus className="w-4 h-4" /> Adicionar</>}
+                    </button>
+                  </div>
+                  <div className="flex flex-col md:flex-row gap-2 items-center">
                     <input
                       type="text"
                       placeholder="Descrição (opcional)..."
-                      className="w-full px-4 py-3 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-white transition-all"
+                      className="flex-1 px-3 py-2 text-sm bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:focus:ring-white transition-all"
                       value={newTask.description}
                       onChange={(e) => setNewTask({ ...newTask, description: e.target.value })}
                     />
+                    <span className="text-[10px] sm:text-xs font-bold text-red-500 uppercase tracking-tight whitespace-nowrap">Qual a fase da tarefa:</span>
+                    <select
+                      className="px-3 py-2 text-sm bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:focus:ring-white transition-all text-blue-500 font-bold md:w-40"
+                      value={newTask.status}
+                      onChange={(e) => setNewTask({ ...newTask, status: e.target.value as TaskStatus })}
+                    >
+                      <option value="backlog">Backlog</option>
+                      <option value="todo">A fazer</option>
+                      <option value="doing">Em progresso</option>
+                      <option value="done">Concluído</option>
+                    </select>
                   </div>
-                  <button
-                    disabled={isAdding || !newTask.title}
-                    className="md:w-48 px-8 py-3 bg-zinc-900 dark:bg-white text-white dark:text-black font-bold rounded-xl hover:opacity-90 transition-all flex items-center justify-center gap-2 disabled:opacity-50 h-[120px]"
-                  >
-                    {isAdding ? <Loader2 className="w-5 h-5 animate-spin" /> : <><Plus className="w-5 h-5" /> Adicionar</>}
-                  </button>
                 </form>
               </div>
             </div>
@@ -379,11 +503,12 @@ export default function PlannerApp() {
           {/* --- Content Tabs --- */}
           {activeTab === 'dashboard' ? (
             <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
                 <StatCard title="Backlog" value={stats.backlog} icon={Clock} color="bg-zinc-500" />
                 <StatCard title="A Fazer" value={stats.todo} icon={Package} color="bg-blue-500" />
                 <StatCard title="Fazendo" value={stats.doing} icon={TrendingUp} color="bg-amber-500" />
                 <StatCard title="Concluídas" value={stats.done} icon={CheckCircle2} color="bg-emerald-500" />
+                <StatCard title="Atrasadas" value={stats.overdue} icon={AlertCircle} color="bg-red-500" />
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -405,14 +530,14 @@ export default function PlannerApp() {
               </div>
             </div>
           ) : (
-            <div className="animate-in fade-in slide-in-from-right-4 duration-500 overflow-x-auto pb-4">
+            <div className="animate-in fade-in slide-in-from-right-4 duration-500 pb-4">
               <DragDropContext onDragEnd={onDragEnd}>
-                <div className="flex gap-4 lg:gap-6 w-full min-w-min">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 w-full">
                   {COLUMNS.map((status) => {
-                    const columnTasks = tasks.filter(t => t.status === status).sort((a, b) => a.order_index - b.order_index);
+                    const columnTasks = filteredTasks.filter(t => t.status === status).sort((a, b) => a.order_index - b.order_index);
 
                     return (
-                      <div key={status} className="flex-1 min-w-[250px] flex flex-col flex-shrink-0">
+                      <div key={status} className="flex flex-col">
                         <div className="flex items-center justify-between mb-4 px-2">
                           <h3 className="font-bold text-zinc-900 dark:text-white uppercase tracking-wider text-sm flex items-center gap-2">
                             <span className={`w-2 h-2 rounded-full ${status === 'done' ? 'bg-emerald-500' :
@@ -441,17 +566,42 @@ export default function PlannerApp() {
                                       ref={provided.innerRef}
                                       {...provided.draggableProps}
                                       {...provided.dragHandleProps}
-                                      className={`bg-white dark:bg-zinc-900 p-4 rounded-xl shadow-sm border group relative ${snapshot.isDragging ? 'shadow-xl border-blue-500 rotate-2 z-50' : 'border-zinc-200 dark:border-zinc-800'
+                                      className={`bg-white dark:bg-zinc-900 p-4 rounded-xl shadow-sm border group relative ${snapshot.isDragging ? 'shadow-xl border-blue-500 rotate-2 z-50' : (task.due_date && task.status !== 'done' && new Date(task.due_date.substring(0, 10) + 'T00:00:00') < new Date(new Date().setHours(0,0,0,0))) ? 'border-red-500/50 bg-red-50/10 dark:bg-red-900/10' : 'border-zinc-200 dark:border-zinc-800'
                                         }`}
                                     >
-                                      <div className="flex items-start justify-between mb-2">
-                                        <h4 className="font-bold text-sm text-zinc-900 dark:text-zinc-100 pr-6 leading-tight">{task.title}</h4>
-                                        <button
-                                          onClick={() => deleteTask(task.id)}
-                                          className="absolute right-3 top-3 opacity-0 group-hover:opacity-100 p-1 hover:bg-red-50 dark:hover:bg-red-900/30 text-red-500 rounded-md transition-all"
-                                        >
-                                          <Trash2 className="w-3.5 h-3.5" />
-                                        </button>
+                                      <div className="flex flex-col gap-1.5 mb-2 relative">
+                                        <div className="flex gap-1.5 flex-wrap">
+                                          {task.priority && (
+                                            <div className={`self-start text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider ${
+                                              task.priority === 'high' ? 'bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400' :
+                                              task.priority === 'medium' ? 'bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400' :
+                                              'bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400'
+                                            }`}>
+                                              {task.priority === 'high' ? 'Alta' : task.priority === 'medium' ? 'Média' : 'Baixa'}
+                                            </div>
+                                          )}
+                                          {task.due_date && (
+                                            <div className={`self-start text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider flex items-center gap-1 leading-none ${task.status !== 'done' && new Date(task.due_date.substring(0, 10) + 'T00:00:00') < new Date(new Date().setHours(0,0,0,0)) ? 'bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400 animate-pulse' : 'bg-blue-100 text-blue-600 dark:bg-blue-900/40 dark:text-blue-400'}`}>
+                                              <Calendar className="w-2.5 h-2.5" />
+                                              {new Date(task.due_date.substring(0, 10) + 'T12:00:00').toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+                                            </div>
+                                          )}
+                                        </div>
+                                        <h4 className="font-bold text-sm text-zinc-900 dark:text-zinc-100 pr-12 leading-tight">{task.title}</h4>
+                                        <div className="absolute right-0 top-0 opacity-0 group-hover:opacity-100 flex gap-1 transition-all">
+                                          <button
+                                            onClick={() => openEditModal(task)}
+                                            className="p-1 hover:bg-blue-50 dark:hover:bg-blue-900/30 text-blue-500 rounded-md transition-all"
+                                          >
+                                            <Edit2 className="w-3.5 h-3.5" />
+                                          </button>
+                                          <button
+                                            onClick={() => deleteTask(task.id)}
+                                            className="p-1 hover:bg-red-50 dark:hover:bg-red-900/30 text-red-500 rounded-md transition-all"
+                                          >
+                                            <Trash2 className="w-3.5 h-3.5" />
+                                          </button>
+                                        </div>
                                       </div>
 
                                       {task.description && (
@@ -489,6 +639,89 @@ export default function PlannerApp() {
           )}
         </main>
       </div>
+
+      {/* Edit Modal Overlay */}
+      <AnimatePresence>
+        {editingTask && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-white dark:bg-zinc-900 w-full max-w-lg p-6 rounded-3xl shadow-2xl border border-zinc-200 dark:border-zinc-800"
+            >
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-bold dark:text-white uppercase tracking-wider text-sm">Editar Tarefa</h2>
+                <button onClick={() => setEditingTask(null)} className="p-2 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full transition-colors">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleSaveEdit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium mb-1 text-zinc-600 dark:text-zinc-400">Título</label>
+                  <input
+                    type="text"
+                    required
+                    className="w-full px-4 py-2.5 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-white transition-all text-sm text-zinc-900 dark:text-zinc-100"
+                    placeholder="Título da tarefa..."
+                    value={editForm.title}
+                    onChange={(e) => setEditForm({ ...editForm, title: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1 text-zinc-600 dark:text-zinc-400">Descrição</label>
+                  <textarea
+                    rows={4}
+                    className="w-full px-4 py-2.5 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-white transition-all text-sm resize-none text-zinc-900 dark:text-zinc-100 placeholder-zinc-400 dark:placeholder-zinc-600"
+                    placeholder="Descrição da tarefa..."
+                    value={editForm.description}
+                    onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1 text-zinc-600 dark:text-zinc-400">Prioridade</label>
+                  <select
+                    className="w-full px-4 py-2.5 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-white transition-all text-sm appearance-none text-zinc-900 dark:text-zinc-100"
+                    value={editForm.priority}
+                    onChange={(e) => setEditForm({ ...editForm, priority: e.target.value as any })}
+                  >
+                    <option value="low">🟢 Baixa</option>
+                    <option value="medium">🟡 Média</option>
+                    <option value="high">🔴 Alta</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium mb-1 text-zinc-600 dark:text-zinc-400">Prazo de Entrega (Due Date)</label>
+                  <input
+                    type="date"
+                    className="w-full px-4 py-2.5 bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-zinc-900 dark:focus:ring-white transition-all text-sm text-zinc-900 dark:text-zinc-100"
+                    value={editForm.due_date}
+                    onChange={(e) => setEditForm({ ...editForm, due_date: e.target.value })}
+                  />
+                </div>
+                
+                <div className="flex gap-3 pt-6">
+                  <button
+                    type="button"
+                    onClick={() => setEditingTask(null)}
+                    className="flex-1 px-4 py-3 bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white font-semibold rounded-xl hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!editForm.title}
+                    className="flex-1 px-4 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-colors disabled:opacity-50"
+                  >
+                    Salvar Alterações
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
