@@ -140,14 +140,16 @@ export default function PlannerApp() {
 
   // --- Auth & Initial Fetch ---
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setLoadingSession(false);
-      if (session) fetchTasks(session.user.id);
-    });
+    // Validate existing token server-side on mount
+    supabase.auth.getUser().then(({ error }) => {
+      if (error) {
+        console.error('Session validation failed:', error.message)
+      }
+    })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
+      setLoadingSession(false);
       if (session) {
         fetchTasks(session.user.id);
         fetchReminders(session.user.id);
