@@ -13,6 +13,7 @@ import {
 } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '@/lib/supabase';
+import { taskInsertSchema, taskUpdateSchema, reminderInsertSchema } from '@/lib/schemas';
 
 // --- Types ---
 type TaskStatus = 'backlog' | 'todo' | 'doing' | 'done';
@@ -140,14 +141,16 @@ export default function PlannerApp() {
 
   // --- Auth & Initial Fetch ---
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setLoadingSession(false);
-      if (session) fetchTasks(session.user.id);
-    });
+    // Validate existing token server-side on mount
+    supabase.auth.getUser().then(({ error }) => {
+      if (error) {
+        console.error('Session validation failed:', error.message)
+      }
+    })
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
+      setLoadingSession(false);
       if (session) {
         fetchTasks(session.user.id);
         fetchReminders(session.user.id);
@@ -225,7 +228,7 @@ export default function PlannerApp() {
     if (error) {
       setAuthError(error.message);
     } else if (isSignUp) {
-      alert("Comando de cadastro enviado com sucesso! \\n\\nSe a página não entrar sozinha agora, é porque o Supabase bloqueou por padrão pedindo verificação de e-mail.\\n\\nPara desbloquear o modo de desenvolvedor fácil: Abra o seu Supabase > Authentication > Providers > Email > Desmarque a opção 'Confirm email' e salve.");
+      setAuthError('Cadastro realizado! Verifique seu e-mail para confirmar a conta.');
     }
     setAuthLoading(false);
   };
@@ -244,15 +247,23 @@ export default function PlannerApp() {
     const reminderTime = new Date(selectedCalendarDate);
     reminderTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
 
+    const reminderPayload = {
+      user_id: session.user.id,
+      lead_name: newReminder.lead_name,
+      reminder_type: newReminder.type,
+      reminder_time: reminderTime.toISOString(),
+      notes: newReminder.notes
+    };
+
+    const parsedReminder = reminderInsertSchema.safeParse(reminderPayload)
+    if (!parsedReminder.success) {
+      console.error('Dados do lembrete inválidos:', parsedReminder.error.flatten())
+      return
+    }
+
     const { data, error } = await supabase
       .from('reminders')
-      .insert({
-        user_id: session.user.id,
-        lead_name: newReminder.lead_name,
-        reminder_type: newReminder.type,
-        reminder_time: reminderTime.toISOString(),
-        notes: newReminder.notes
-      })
+      .insert(parsedReminder.data)
       .select()
       .single();
 
@@ -298,14 +309,20 @@ export default function PlannerApp() {
     setTasks(prev => [...prev, { ...taskToInsert, id: tempId, due_date: newTask.due_date || null }]);
     setNewTask({ title: '', description: '', priority: 'medium' as 'low' | 'medium' | 'high', due_date: '', status: 'backlog' as TaskStatus });
 
-    const { data, error } = await supabase.from('tasks').insert(taskToInsert).select().single();
+    const parsed = taskInsertSchema.safeParse(taskToInsert)
+    if (!parsed.success) {
+      console.error('Dados inválidos:', parsed.error.flatten())
+      setIsAdding(false)
+      return
+    }
+
+    const { data, error } = await supabase.from('tasks').insert(parsed.data).select().single();
 
     if (data) {
       setTasks(prev => prev.map(t => t.id === tempId ? data : t));
     } else {
       setTasks(prev => prev.filter(t => t.id !== tempId)); // Rollback
       console.error('Insert error:', error);
-      alert(`Erro Supabase: ${error?.message || error?.details || JSON.stringify(error)}`);
     }
     setIsAdding(false);
   };
@@ -340,14 +357,19 @@ export default function PlannerApp() {
     const previousTasks = [...tasks];
     setTasks(prev => prev.map(t => t.id === editingTask.id ? { ...t, ...updatePayload } : t)); // Optimistic
 
+    const parsedUpdate = taskUpdateSchema.safeParse(updatePayload)
+    if (!parsedUpdate.success) {
+      console.error('Dados inválidos:', parsedUpdate.error.flatten())
+      return
+    }
+
     const { error } = await supabase
       .from('tasks')
-      .update(updatePayload)
+      .update(parsedUpdate.data)
       .eq('id', editingTask.id);
 
     if (error) {
       console.error(error);
-      alert('Erro ao atualizar. Voltando ao estado original.');
       setTasks(previousTasks); // Rollback
     }
 
