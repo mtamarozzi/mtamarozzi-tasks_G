@@ -19,10 +19,11 @@ export const taskUpdateSchema = z.object({
 })
 
 export const reminderInsertSchema = z.object({
-  task_id: z.string().uuid(),
   user_id: z.string().uuid(),
+  lead_name: z.string().min(1, 'Nome obrigatório').max(255),
+  reminder_type: z.string().min(1).max(100),
   reminder_time: z.string().datetime({ message: 'Data/hora inválida' }),
-  recurrence: z.string().optional(),
+  notes: z.string().max(2000).optional(),
 })
 
 export type TaskInsert = z.infer<typeof taskInsertSchema>

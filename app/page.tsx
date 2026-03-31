@@ -255,19 +255,15 @@ export default function PlannerApp() {
       notes: newReminder.notes
     };
 
-    const parsedReminder = reminderInsertSchema.safeParse({
-      task_id: '00000000-0000-0000-0000-000000000000',
-      user_id: reminderPayload.user_id,
-      reminder_time: reminderPayload.reminder_time,
-    });
+    const parsedReminder = reminderInsertSchema.safeParse(reminderPayload)
     if (!parsedReminder.success) {
-      console.error('Dados inválidos:', parsedReminder.error.flatten())
+      console.error('Dados do lembrete inválidos:', parsedReminder.error.flatten())
       return
     }
 
     const { data, error } = await supabase
       .from('reminders')
-      .insert(reminderPayload)
+      .insert(parsedReminder.data)
       .select()
       .single();
 
