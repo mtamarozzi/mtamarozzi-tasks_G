@@ -28,6 +28,17 @@ interface Task {
   priority?: 'low' | 'medium' | 'high';
 }
 
+interface Reminder {
+  id: string;
+  user_id: string;
+  lead_name: string;
+  reminder_type: string;
+  reminder_time: string;
+  notes: string;
+  notified: boolean;
+  created_at: string;
+}
+
 const STATUS_MAP: Record<TaskStatus, string> = {
   backlog: 'Backlog',
   todo: 'A Fazer',
@@ -37,6 +48,21 @@ const STATUS_MAP: Record<TaskStatus, string> = {
 
 const COLUMNS: TaskStatus[] = ['backlog', 'todo', 'doing', 'done'];
 const COLORS = ['#3b82f6', '#f59e0b', '#10b981', '#ef4444'];
+
+// --- Date Helpers ---
+const MONTHS_PT = [
+  "Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+  "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"
+];
+
+const DAYS_OF_WEEK = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+
+const getDaysInMonth = (date: Date) => new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate();
+const getFirstDayOfMonth = (date: Date) => new Date(date.getFullYear(), date.getMonth(), 1).getDay();
+const isSameDay = (date1: Date, date2: Date) => 
+  date1.getDate() === date2.getDate() && 
+  date1.getMonth() === date2.getMonth() && 
+  date1.getFullYear() === date2.getFullYear();
 
 // --- Components ---
 const StatCard = ({ title, value, icon: Icon, color }: any) => (
@@ -63,8 +89,9 @@ export default function PlannerApp() {
 
   // App State
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [reminders, setReminders] = useState<Reminder[]>([]);
   const [isDarkMode, setIsDarkMode] = useState(false);
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'kanban'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'kanban' | 'calendar'>('kanban');
   const [newTask, setNewTask] = useState({ title: '', description: '', priority: 'medium' as 'low' | 'medium' | 'high', due_date: '', status: 'backlog' as TaskStatus });
   const [isAdding, setIsAdding] = useState(false);
   
@@ -99,6 +126,18 @@ export default function PlannerApp() {
   // Search State
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Calendar State
+  const [currentDate, setCurrentDate] = useState(new Date());
+  const [isReminderModalOpen, setIsReminderModalOpen] = useState(false);
+  const [selectedCalendarDate, setSelectedCalendarDate] = useState<Date | null>(null);
+  const [newReminder, setNewReminder] = useState({
+    lead_name: '',
+    type: 'Follow-up de Lead',
+    time: '',
+    notes: ''
+  });
+  const [activeReminderAlert, setActiveReminderAlert] = useState<Reminder | null>(null);
+
   // --- Auth & Initial Fetch ---
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -109,11 +148,47 @@ export default function PlannerApp() {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setSession(session);
-      if (session) fetchTasks(session.user.id);
+      if (session) {
+        fetchTasks(session.user.id);
+        fetchReminders(session.user.id);
+      }
     });
 
     return () => subscription.unsubscribe();
   }, []);
+
+  // Notification Polling
+  useEffect(() => {
+    const checkReminders = () => {
+      if (!session || reminders.length === 0) return;
+      
+      const now = new Date();
+      
+      reminders.forEach(async (reminder) => {
+        if (reminder.notified) return;
+        
+        const eventTime = new Date(reminder.reminder_time);
+        const timeDiff = eventTime.getTime() - now.getTime();
+        const minutesDiff = Math.floor(timeDiff / (1000 * 60));
+        
+        // Alerta quando estiver entre 4 e 5 minutos (ou se já passou um pouco mas ainda não foi notificado)
+        if (minutesDiff <= 5 && minutesDiff >= 0) {
+          setActiveReminderAlert(reminder);
+          
+          // Marcar como notificado no banco para não repetir
+          await supabase
+            .from('reminders')
+            .update({ notified: true })
+            .eq('id', reminder.id);
+            
+          setReminders(prev => prev.map(r => r.id === reminder.id ? { ...r, notified: true } : r));
+        }
+      });
+    };
+
+    const interval = setInterval(checkReminders, 30000); // Check every 30s
+    return () => clearInterval(interval);
+  }, [reminders, session]);
 
   const fetchTasks = async (userId: string) => {
     const { data, error } = await supabase
@@ -125,6 +200,47 @@ export default function PlannerApp() {
     if (data) setTasks(data);
     else if (error) console.error(error);
   };
+
+  const fetchReminders = async (userId: string) => {
+    const { data, error } = await supabase
+      .from('reminders')
+      .select('*')
+      .eq('user_id', userId)
+      .order('reminder_time', { ascending: true });
+
+    if (data) setReminders(data);
+    else if (error) console.error(error);
+  };
+
+  const stats = useMemo(() => {
+    const backlog = tasks.filter(t => t.status === 'backlog').length;
+    const todo = tasks.filter(t => t.status === 'todo').length;
+    const doing = tasks.filter(t => t.status === 'doing').length;
+    const done = tasks.filter(t => t.status === 'done').length;
+    const now = new Date().setHours(0,0,0,0);
+    const overdue = tasks.filter(t => 
+      t.status !== 'done' && 
+      t.due_date && 
+      new Date(t.due_date.substring(0, 10) + 'T00:00:00') < new Date(now)
+    ).length;
+
+    return {
+      backlog, todo, doing, done, overdue,
+      chartData: [
+        { name: 'Backlog', total: backlog },
+        { name: 'A Fazer', total: todo },
+        { name: 'Fazendo', total: doing },
+        { name: 'Concluídas', total: done }
+      ]
+    };
+  }, [tasks]);
+
+  const filteredTasks = useMemo(() => {
+    return tasks.filter(t => 
+      t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (t.description && t.description.toLowerCase().includes(searchQuery.toLowerCase()))
+    );
+  }, [tasks, searchQuery]);
 
   const handleLogin = async (e: React.FormEvent, isSignUp = false) => {
     e.preventDefault();
@@ -146,6 +262,44 @@ export default function PlannerApp() {
   const handleLogout = async () => {
     await supabase.auth.signOut();
     setTasks([]);
+    setReminders([]);
+  };
+
+  const handleCreateReminder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!session || !selectedCalendarDate) return;
+
+    const [hours, minutes] = (newReminder.time || '00:00').split(':');
+    const reminderTime = new Date(selectedCalendarDate);
+    reminderTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+
+    const { data, error } = await supabase
+      .from('reminders')
+      .insert({
+        user_id: session.user.id,
+        lead_name: newReminder.lead_name,
+        reminder_type: newReminder.type,
+        reminder_time: reminderTime.toISOString(),
+        notes: newReminder.notes
+      })
+      .select()
+      .single();
+
+    if (data) {
+      setReminders(prev => [...prev, data]);
+      setIsReminderModalOpen(false);
+      setNewReminder({ lead_name: '', type: 'Follow-up de Lead', time: '', notes: '' });
+    } else if (error) {
+      console.error(error);
+    }
+  };
+
+  const nextMonth = () => {
+    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 1));
+  };
+
+  const prevMonth = () => {
+    setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
   };
 
   // --- Task Logic ---
@@ -422,6 +576,12 @@ export default function PlannerApp() {
               >
                 Kanban
               </button>
+              <button
+                onClick={() => setActiveTab('calendar')}
+                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'calendar' ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-white' : 'text-zinc-500 hover:text-zinc-700'}`}
+              >
+                Calendário
+              </button>
             </nav>
 
             <div className="flex items-center gap-3">
@@ -532,6 +692,64 @@ export default function PlannerApp() {
                     </ResponsiveContainer>
                   </div>
                 </div>
+              </div>
+            </div>
+          ) : activeTab === 'calendar' ? (
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 bg-white dark:bg-zinc-900 p-6 rounded-3xl border border-zinc-200 dark:border-zinc-800 shadow-xl overflow-hidden min-h-[600px]">
+              <div className="flex items-center justify-between mb-8 px-4">
+                <div className="flex items-center gap-4">
+                  <button onClick={prevMonth} className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full transition-colors">
+                    <ChevronRight className="w-6 h-6 rotate-180 text-zinc-400 hover:text-zinc-900 dark:hover:text-white" />
+                  </button>
+                  <h2 className="text-xl font-bold min-w-[180px] text-center dark:text-white uppercase tracking-tight">
+                    {MONTHS_PT[currentDate.getMonth()]} {currentDate.getFullYear()}
+                  </h2>
+                  <button onClick={nextMonth} className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full transition-colors">
+                    <ChevronRight className="w-6 h-6 text-zinc-400 hover:text-zinc-900 dark:hover:text-white" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-7 border-b border-zinc-100 dark:border-zinc-800 mb-2">
+                {DAYS_OF_WEEK.map(day => (
+                  <div key={day} className="py-2 text-center text-[10px] font-bold text-zinc-400 uppercase tracking-widest">{day}</div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-7 gap-px bg-zinc-100 dark:bg-zinc-800 rounded-2xl overflow-hidden border border-zinc-100 dark:border-zinc-800">
+                {Array.from({ length: getFirstDayOfMonth(currentDate) }).map((_, i) => (
+                  <div key={`empty-${i}`} className="bg-white dark:bg-zinc-900/50 aspect-[4/3]"></div>
+                ))}
+                {Array.from({ length: getDaysInMonth(currentDate) }).map((_, i) => {
+                  const day = i + 1;
+                  const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+                  const isToday = isSameDay(date, new Date());
+                  const dayReminders = reminders.filter(r => isSameDay(new Date(r.reminder_time), date));
+
+                  return (
+                    <div 
+                      key={day} 
+                      onClick={() => {
+                        setSelectedCalendarDate(date);
+                        setIsReminderModalOpen(true);
+                      }}
+                      className="bg-white dark:bg-zinc-900 aspect-[4/3] p-2 hover:bg-zinc-50 dark:hover:bg-zinc-800/80 transition-colors cursor-pointer group relative"
+                    >
+                      <div className="flex justify-between items-start">
+                        <span className={`text-sm font-bold ${isToday ? 'bg-blue-600 text-white w-6 h-6 flex items-center justify-center rounded-full' : 'text-zinc-400 dark:text-zinc-500'}`}>
+                          {day}
+                        </span>
+                      </div>
+                      <div className="mt-1 space-y-1 overflow-y-auto max-h-[80%] pb-1 scrollbar-hide">
+                        {dayReminders.map(r => (
+                          <div key={r.id} className="text-[9px] font-bold px-1.5 py-0.5 bg-blue-50 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded border border-blue-100 dark:border-blue-800/50 truncate">
+                            {new Date(r.reminder_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} {r.lead_name}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           ) : (
@@ -726,6 +944,135 @@ export default function PlannerApp() {
             </motion.div>
           </div>
         )}
+        {/* --- Reminder Modal --- */}
+        {isReminderModalOpen && selectedCalendarDate && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              className="bg-white dark:bg-[#111827] w-full max-w-md p-6 rounded-3xl shadow-2xl border border-zinc-200 dark:border-zinc-800"
+            >
+              <div className="flex items-center justify-between mb-8">
+                <div className="space-y-0.5">
+                  <h2 className="text-xl font-bold dark:text-white">Novo lembrete</h2>
+                  <p className="text-xs font-bold text-blue-500">{selectedCalendarDate.toLocaleDateString()}</p>
+                </div>
+                <button onClick={() => setIsReminderModalOpen(false)} className="p-2 text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full transition-colors">
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              <form onSubmit={handleCreateReminder} className="space-y-5">
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider mb-2 text-zinc-500 dark:text-zinc-400">Lead / Nome</label>
+                  <input
+                    type="text"
+                    required
+                    className="w-full px-4 py-3 bg-zinc-50 dark:bg-[#0b0f1a] border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 transition-all text-sm text-zinc-900 dark:text-white"
+                    placeholder="Nome do lead"
+                    value={newReminder.lead_name}
+                    onChange={(e) => setNewReminder({ ...newReminder, lead_name: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider mb-2 text-zinc-500 dark:text-zinc-400">Tipo</label>
+                  <select
+                    className="w-full px-4 py-3 bg-zinc-50 dark:bg-[#0b0f1a] border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 transition-all text-sm text-zinc-900 dark:text-white appearance-none cursor-pointer"
+                    value={newReminder.type}
+                    onChange={(e) => setNewReminder({ ...newReminder, type: e.target.value })}
+                  >
+                    <option value="Follow-up de Lead">Follow-up de Lead</option>
+                    <option value="Reunião">Reunião</option>
+                    <option value="Ligação">Ligação</option>
+                    <option value="Envio de Proposta">Envio de Proposta</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider mb-2 text-zinc-500 dark:text-zinc-400">Horário (opcional)</label>
+                  <input
+                    type="time"
+                    className="w-full px-4 py-3 bg-zinc-50 dark:bg-[#0b0f1a] border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 transition-all text-sm text-zinc-900 dark:text-white"
+                    value={newReminder.time}
+                    onChange={(e) => setNewReminder({ ...newReminder, time: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-bold uppercase tracking-wider mb-2 text-zinc-500 dark:text-zinc-400">Nota</label>
+                  <textarea
+                    rows={3}
+                    className="w-full px-4 py-3 bg-zinc-50 dark:bg-[#0b0f1a] border border-zinc-200 dark:border-zinc-800 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 transition-all text-sm resize-none text-zinc-900 dark:text-white placeholder-zinc-400 dark:placeholder-zinc-600"
+                    placeholder="Observações..."
+                    value={newReminder.notes}
+                    onChange={(e) => setNewReminder({ ...newReminder, notes: e.target.value })}
+                  />
+                </div>
+                
+                <div className="flex gap-3 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setIsReminderModalOpen(false)}
+                    className="flex-1 px-4 py-3 bg-zinc-50 dark:bg-zinc-800 text-zinc-900 dark:text-white font-bold rounded-xl border border-zinc-200 dark:border-zinc-800 hover:bg-zinc-100 dark:hover:bg-zinc-700 transition-all"
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 px-4 py-3 bg-blue-600 text-white font-bold rounded-xl hover:bg-blue-700 transition-all shadow-lg shadow-blue-600/20"
+                  >
+                    Salvar
+                  </button>
+                </div>
+              </form>
+            </motion.div>
+          </div>
+        )}
+
+        {/* --- Reminder Auto-Alert --- */}
+        <AnimatePresence>
+          {activeReminderAlert && (
+            <div className="fixed bottom-8 right-8 z-[100]">
+              <motion.div
+                initial={{ opacity: 0, x: 100, scale: 0.9 }}
+                animate={{ opacity: 1, x: 0, scale: 1 }}
+                exit={{ opacity: 0, x: 100, scale: 0.9 }}
+                className="bg-blue-600 text-white p-6 rounded-3xl shadow-2xl w-80 border border-blue-400/30"
+              >
+                <div className="flex items-start justify-between mb-4">
+                  <div className="p-2 bg-white/20 rounded-xl">
+                    <Clock className="w-6 h-6 text-white" />
+                  </div>
+                  <button onClick={() => setActiveReminderAlert(null)} className="p-1 hover:bg-white/10 rounded-lg transition-colors">
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+                <h3 className="text-lg font-bold mb-1">Lembrete de Compromisso</h3>
+                <p className="text-blue-100 text-sm mb-4">Seu evento começa em 5 minutos!</p>
+                
+                <div className="space-y-2 mb-6">
+                  <div className="flex justify-between text-xs border-b border-white/10 pb-2">
+                    <span className="opacity-70">Lead:</span>
+                    <span className="font-bold">{activeReminderAlert.lead_name}</span>
+                  </div>
+                  <div className="flex justify-between text-xs border-b border-white/10 pb-2">
+                    <span className="opacity-70">Tipo:</span>
+                    <span className="font-bold">{activeReminderAlert.reminder_type}</span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="opacity-70">Horário:</span>
+                    <span className="font-bold">{new Date(activeReminderAlert.reminder_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={() => setActiveReminderAlert(null)}
+                  className="w-full py-3 bg-white text-blue-600 font-bold rounded-xl hover:bg-blue-50 transition-colors shadow-lg"
+                >
+                  Entendi
+                </button>
+              </motion.div>
+            </div>
+          )}
+        </AnimatePresence>
       </AnimatePresence>
     </div>
   );
