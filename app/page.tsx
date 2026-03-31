@@ -228,7 +228,7 @@ export default function PlannerApp() {
     if (error) {
       setAuthError(error.message);
     } else if (isSignUp) {
-      alert("Comando de cadastro enviado com sucesso! \\n\\nSe a página não entrar sozinha agora, é porque o Supabase bloqueou por padrão pedindo verificação de e-mail.\\n\\nPara desbloquear o modo de desenvolvedor fácil: Abra o seu Supabase > Authentication > Providers > Email > Desmarque a opção 'Confirm email' e salve.");
+      setAuthError('Cadastro realizado! Verifique seu e-mail para confirmar a conta.');
     }
     setAuthLoading(false);
   };
@@ -323,7 +323,6 @@ export default function PlannerApp() {
     } else {
       setTasks(prev => prev.filter(t => t.id !== tempId)); // Rollback
       console.error('Insert error:', error);
-      alert(`Erro Supabase: ${error?.message || error?.details || JSON.stringify(error)}`);
     }
     setIsAdding(false);
   };
@@ -371,7 +370,6 @@ export default function PlannerApp() {
 
     if (error) {
       console.error(error);
-      alert('Erro ao atualizar. Voltando ao estado original.');
       setTasks(previousTasks); // Rollback
     }
 
