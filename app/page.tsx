@@ -485,14 +485,19 @@ export default function PlannerApp() {
                     />
                     <span className="text-[10px] sm:text-xs font-bold text-red-500 uppercase tracking-tight whitespace-nowrap">Qual a fase da tarefa:</span>
                     <select
-                      className="px-3 py-2 text-sm bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:focus:ring-white transition-all text-blue-500 font-bold md:w-40"
+                      className={`px-3 py-2 text-sm bg-zinc-50 dark:bg-black border border-zinc-200 dark:border-zinc-800 rounded-lg focus:outline-none focus:ring-1 focus:ring-zinc-900 dark:focus:ring-white transition-all font-bold md:w-40 ${
+                        newTask.status === 'done' ? 'text-emerald-500' :
+                        newTask.status === 'doing' ? 'text-amber-500' :
+                        newTask.status === 'todo' ? 'text-blue-500' : 
+                        'text-zinc-500'
+                      }`}
                       value={newTask.status}
                       onChange={(e) => setNewTask({ ...newTask, status: e.target.value as TaskStatus })}
                     >
-                      <option value="backlog">Backlog</option>
-                      <option value="todo">A fazer</option>
-                      <option value="doing">Em progresso</option>
-                      <option value="done">Concluído</option>
+                      <option value="backlog" className="text-zinc-500">Backlog</option>
+                      <option value="todo" className="text-blue-500">A fazer</option>
+                      <option value="doing" className="text-amber-500">Em progresso</option>
+                      <option value="done" className="text-emerald-500">Concluído</option>
                     </select>
                   </div>
                 </form>
