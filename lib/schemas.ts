@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-export const TaskStatus = z.enum(['backlog', 'doing', 'done', 'blocked'])
+export const TaskStatus = z.enum(['backlog', 'todo', 'doing', 'done'])
 
 export const taskInsertSchema = z.object({
   title: z.string().min(1, 'Título obrigatório').max(255),
