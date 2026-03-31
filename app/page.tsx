@@ -212,35 +212,6 @@ export default function PlannerApp() {
     else if (error) console.error(error);
   };
 
-  const stats = useMemo(() => {
-    const backlog = tasks.filter(t => t.status === 'backlog').length;
-    const todo = tasks.filter(t => t.status === 'todo').length;
-    const doing = tasks.filter(t => t.status === 'doing').length;
-    const done = tasks.filter(t => t.status === 'done').length;
-    const now = new Date().setHours(0,0,0,0);
-    const overdue = tasks.filter(t => 
-      t.status !== 'done' && 
-      t.due_date && 
-      new Date(t.due_date.substring(0, 10) + 'T00:00:00') < new Date(now)
-    ).length;
-
-    return {
-      backlog, todo, doing, done, overdue,
-      chartData: [
-        { name: 'Backlog', total: backlog },
-        { name: 'A Fazer', total: todo },
-        { name: 'Fazendo', total: doing },
-        { name: 'Concluídas', total: done }
-      ]
-    };
-  }, [tasks]);
-
-  const filteredTasks = useMemo(() => {
-    return tasks.filter(t => 
-      t.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      (t.description && t.description.toLowerCase().includes(searchQuery.toLowerCase()))
-    );
-  }, [tasks, searchQuery]);
 
   const handleLogin = async (e: React.FormEvent, isSignUp = false) => {
     e.preventDefault();
