@@ -510,6 +510,7 @@ export default function PlannerApp() {
 
     if (!destination) return;
     if (source.droppableId === destination.droppableId && source.index === destination.index) return;
+    if (!session) return; // Guard para TypeScript (session não pode ser null aqui, mas o tipo permite)
 
     const sourceStatus = source.droppableId as TaskStatus;
     const destStatus = destination.droppableId as TaskStatus;
