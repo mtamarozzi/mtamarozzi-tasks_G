@@ -121,7 +121,7 @@ const isSameDay = (date1: Date, date2: Date) =>
 
 // --- Components ---
 const StatCard = ({ title, value, icon: Icon, color }: any) => (
-  <div className="bg-white dark:bg-zinc-900 p-4 rounded-xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+  <div className="bg-white/60 dark:bg-white/10 p-4 rounded-2xl border border-white/40 dark:border-white/15 shadow-lg shadow-black/5 dark:shadow-black/40 backdrop-blur-xl">
     <div className="flex items-center justify-between mb-3">
       <div className={`p-1.5 rounded-md ${color}`}>
         <Icon className="w-4 h-4 text-white" />
@@ -649,10 +649,49 @@ export default function PlannerApp() {
   // --- Main App UI ---
   return (
     <div className={`${isDarkMode ? 'dark' : ''} min-h-screen transition-colors duration-300`}>
-      <div className="bg-zinc-50 dark:bg-black text-zinc-900 dark:text-zinc-100 min-h-screen font-sans">
+      <div className="relative bg-zinc-100 dark:bg-[#1a1625] text-zinc-900 dark:text-zinc-100 min-h-screen font-sans overflow-hidden">
+
+        {/* --- Background Orbs (efeito glass — camada de fundo fixa) --- */}
+        <div className="fixed inset-0 overflow-hidden pointer-events-none -z-0">
+          {/* Orb ciano/teal — topo esquerdo */}
+          <div
+            className="absolute -top-40 -left-40 w-[600px] h-[600px] rounded-full opacity-60 dark:opacity-60"
+            style={{
+              background: 'radial-gradient(circle, rgba(34,211,238,0.6) 0%, rgba(34,211,238,0) 70%)',
+              filter: 'blur(80px)',
+            }}
+          />
+          {/* Orb âmbar — centro direito */}
+          <div
+            className="absolute top-1/3 -right-40 w-[700px] h-[700px] rounded-full opacity-50 dark:opacity-55"
+            style={{
+              background: 'radial-gradient(circle, rgba(251,146,60,0.55) 0%, rgba(251,146,60,0) 70%)',
+              filter: 'blur(100px)',
+            }}
+          />
+          {/* Orb rosa/magenta — inferior central */}
+          <div
+            className="absolute -bottom-40 left-1/3 w-[650px] h-[650px] rounded-full opacity-50 dark:opacity-55"
+            style={{
+              background: 'radial-gradient(circle, rgba(236,72,153,0.5) 0%, rgba(236,72,153,0) 70%)',
+              filter: 'blur(90px)',
+            }}
+          />
+          {/* Orb violeta — diagonal sutil (camada de profundidade) */}
+          <div
+            className="absolute top-1/2 left-1/4 w-[500px] h-[500px] rounded-full opacity-45 dark:opacity-45"
+            style={{
+              background: 'radial-gradient(circle, rgba(139,92,246,0.4) 0%, rgba(139,92,246,0) 70%)',
+              filter: 'blur(70px)',
+            }}
+          />
+        </div>
+
+        {/* Todo o conteúdo principal fica acima dos orbes */}
+        <div className="relative z-10">
 
         {/* --- Header --- */}
-        <header className="sticky top-0 z-50 bg-white/80 dark:bg-black/80 backdrop-blur-md border-b border-zinc-200 dark:border-zinc-800">
+        <header className="sticky top-0 z-50 bg-white/40 dark:bg-white/10 backdrop-blur-2xl border-b border-white/40 dark:border-white/15 shadow-sm shadow-black/5">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
             <div className="flex items-center gap-2">
               <div className="w-8 h-8 bg-zinc-900 dark:bg-white rounded-lg flex items-center justify-center">
@@ -670,29 +709,29 @@ export default function PlannerApp() {
                 <input
                   type="text"
                   placeholder="Pesquisar tarefas..."
-                  className="w-full pl-10 pr-4 py-2 bg-zinc-100 dark:bg-zinc-900 border-none rounded-xl text-sm focus:ring-1 focus:ring-zinc-300 dark:focus:ring-zinc-700 outline-none transition-all"
+                  className="w-full pl-10 pr-4 py-2 bg-white/40 dark:bg-white/10 border border-white/40 dark:border-white/15 rounded-xl text-sm focus:ring-1 focus:ring-zinc-300 dark:focus:ring-white/20 outline-none transition-all backdrop-blur-md"
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                 />
               </div>
             </div>
 
-            <nav className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-900 p-1 rounded-xl">
+            <nav className="flex items-center gap-1 bg-white/40 dark:bg-white/10 p-1 rounded-xl border border-white/40 dark:border-white/15 backdrop-blur-md">
               <button
                 onClick={() => setActiveTab('dashboard')}
-                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'dashboard' ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-white' : 'text-zinc-500 hover:text-zinc-700'}`}
+                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'dashboard' ? 'bg-white/80 dark:bg-white/20 shadow-sm text-zinc-900 dark:text-white backdrop-blur-md' : 'text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white'}`}
               >
                 Dashboard
               </button>
               <button
                 onClick={() => setActiveTab('kanban')}
-                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'kanban' ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-white' : 'text-zinc-500 hover:text-zinc-700'}`}
+                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'kanban' ? 'bg-white/80 dark:bg-white/20 shadow-sm text-zinc-900 dark:text-white backdrop-blur-md' : 'text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white'}`}
               >
                 Kanban
               </button>
               <button
                 onClick={() => setActiveTab('calendar')}
-                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'calendar' ? 'bg-white dark:bg-zinc-800 shadow-sm text-zinc-900 dark:text-white' : 'text-zinc-500 hover:text-zinc-700'}`}
+                className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-all ${activeTab === 'calendar' ? 'bg-white/80 dark:bg-white/20 shadow-sm text-zinc-900 dark:text-white backdrop-blur-md' : 'text-zinc-600 dark:text-zinc-300 hover:text-zinc-900 dark:hover:text-white'}`}
               >
                 Calendário
               </button>
@@ -713,7 +752,7 @@ export default function PlannerApp() {
 
           {/* --- Input Section --- */}
           <section className="mb-8">
-            <div className="bg-white dark:bg-zinc-900 p-5 rounded-2xl border border-zinc-200 dark:border-zinc-800 shadow-sm relative overflow-hidden">
+            <div className="bg-white/60 dark:bg-white/10 p-5 rounded-2xl border border-white/40 dark:border-white/15 shadow-lg shadow-black/5 dark:shadow-black/40 backdrop-blur-xl relative overflow-hidden">
               <div className="absolute top-0 right-0 w-64 h-64 bg-zinc-100 dark:bg-zinc-800/50 rounded-full -mr-32 -mt-32 blur-3xl opacity-50 pointer-events-none"></div>
 
               <div className="relative z-10">
@@ -791,7 +830,7 @@ export default function PlannerApp() {
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                <div className="bg-white dark:bg-zinc-900 p-8 rounded-3xl border border-zinc-200 dark:border-zinc-800 shadow-sm">
+                <div className="bg-white/60 dark:bg-white/10 p-8 rounded-3xl border border-white/40 dark:border-white/15 shadow-lg shadow-black/5 dark:shadow-black/40 backdrop-blur-xl">
                   <h3 className="text-lg font-bold mb-6 flex items-center gap-2">
                     <TrendingUp className="w-5 h-5 text-blue-500" /> Visão Geral
                   </h3>
@@ -809,7 +848,7 @@ export default function PlannerApp() {
               </div>
             </div>
           ) : activeTab === 'calendar' ? (
-            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 bg-white dark:bg-zinc-900 p-6 rounded-3xl border border-zinc-200 dark:border-zinc-800 shadow-xl overflow-hidden min-h-[600px]">
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 bg-white/60 dark:bg-white/10 p-6 rounded-3xl border border-white/40 dark:border-white/15 shadow-xl shadow-black/5 dark:shadow-black/40 backdrop-blur-xl overflow-hidden min-h-[600px]">
               <div className="flex items-center justify-between mb-8 px-4">
                 <div className="flex items-center gap-4">
                   <button onClick={prevMonth} className="p-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 rounded-full transition-colors">
@@ -893,7 +932,7 @@ export default function PlannerApp() {
                             <div
                               ref={provided.innerRef}
                               {...provided.droppableProps}
-                              className={`flex flex-col gap-3 min-h-[500px] bg-zinc-100/50 dark:bg-zinc-900/30 p-2.5 rounded-2xl border transition-colors ${snapshot.isDraggingOver ? 'border-zinc-300 dark:border-zinc-700 bg-zinc-200/50 dark:bg-zinc-800/50' : 'border-dashed border-zinc-200 dark:border-zinc-800'
+                              className={`flex flex-col gap-3 min-h-[500px] bg-white/30 dark:bg-white/10 p-2.5 rounded-2xl border transition-colors backdrop-blur-md ${snapshot.isDraggingOver ? 'border-white/60 dark:border-white/25 bg-white/50 dark:bg-white/15' : 'border-dashed border-white/40 dark:border-white/15'
                                 }`}
                             >
                               {columnTasks.map((task, index) => (
@@ -903,7 +942,7 @@ export default function PlannerApp() {
                                       ref={provided.innerRef}
                                       {...provided.draggableProps}
                                       {...provided.dragHandleProps}
-                                      className={`bg-white dark:bg-zinc-900 p-4 rounded-xl shadow-sm border group relative ${snapshot.isDragging ? 'shadow-xl border-blue-500 rotate-2 z-50' : (task.due_date && task.status !== 'done' && new Date(task.due_date.substring(0, 10) + 'T00:00:00') < new Date(new Date().setHours(0,0,0,0))) ? 'border-red-500/50 bg-red-50/10 dark:bg-red-900/10' : 'border-zinc-200 dark:border-zinc-800'
+                                      className={`bg-white/70 dark:bg-white/15 p-4 rounded-xl shadow-md shadow-black/5 dark:shadow-black/30 border group relative backdrop-blur-xl ${snapshot.isDragging ? 'shadow-2xl border-blue-400/60 rotate-2 z-50' : (task.due_date && task.status !== 'done' && new Date(task.due_date.substring(0, 10) + 'T00:00:00') < new Date(new Date().setHours(0,0,0,0))) ? 'border-red-400/50 bg-red-50/40 dark:bg-red-900/20' : 'border-white/40 dark:border-white/20'
                                         }`}
                                     >
                                       <div className="flex flex-col gap-1.5 mb-2 relative">
@@ -948,7 +987,7 @@ export default function PlannerApp() {
                                       )}
 
                                       <div className="flex items-center justify-between mt-auto opacity-60">
-                                        <div className="flex items-center gap-1 text-zinc-500 text-[10px] font-medium font-mono bg-zinc-100 dark:bg-zinc-800 px-2 py-1 rounded">
+                                        <div className="flex items-center gap-1 text-zinc-500 dark:text-zinc-400 text-[10px] font-medium font-mono bg-white/60 dark:bg-white/15 px-2 py-1 rounded backdrop-blur-sm">
                                           #{task.order_index}
                                         </div>
                                       </div>
@@ -975,17 +1014,18 @@ export default function PlannerApp() {
             </div>
           )}
         </main>
+        </div>
       </div>
 
       {/* Edit Modal Overlay */}
       <AnimatePresence>
         {editingTask && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm">
+          <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-md">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="bg-white dark:bg-zinc-900 w-full max-w-lg p-6 rounded-3xl shadow-2xl border border-zinc-200 dark:border-zinc-800"
+              className="bg-white/80 dark:bg-white/15 w-full max-w-lg p-6 rounded-3xl shadow-2xl border border-white/40 dark:border-white/20 backdrop-blur-2xl"
             >
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-xl font-bold dark:text-white uppercase tracking-wider text-sm">Editar Tarefa</h2>
@@ -1060,11 +1100,11 @@ export default function PlannerApp() {
         )}
         {/* --- Reminder Modal --- */}
         {isReminderModalOpen && selectedCalendarDate && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-md">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
-              className="bg-white dark:bg-[#111827] w-full max-w-md p-6 rounded-3xl shadow-2xl border border-zinc-200 dark:border-zinc-800"
+              className="bg-white/80 dark:bg-white/15 w-full max-w-md p-6 rounded-3xl shadow-2xl border border-white/40 dark:border-white/20 backdrop-blur-2xl"
             >
               <div className="flex items-center justify-between mb-8">
                 <div className="space-y-0.5">
@@ -1143,12 +1183,12 @@ export default function PlannerApp() {
 
         {/* --- Delete Confirmation Modal --- */}
         {taskToDelete && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-md">
             <motion.div
               initial={{ opacity: 0, scale: 0.95, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="bg-white dark:bg-zinc-900 w-full max-w-md p-6 rounded-3xl shadow-2xl border border-zinc-200 dark:border-zinc-800"
+              className="bg-white/80 dark:bg-white/15 w-full max-w-md p-6 rounded-3xl shadow-2xl border border-white/40 dark:border-white/20 backdrop-blur-2xl"
             >
               <div className="flex items-start gap-4 mb-6">
                 <div className="p-3 bg-red-50 dark:bg-red-900/30 rounded-2xl shrink-0">
