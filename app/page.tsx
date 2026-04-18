@@ -12,7 +12,62 @@ import {
   PieChart, Pie, Cell
 } from 'recharts';
 import { motion, AnimatePresence } from 'motion/react';
+import { z } from 'zod';
 import { supabase } from '@/lib/supabase';
+
+// --- Validação de Inputs (achado 4.1 do relatório de segurança) ---
+const TaskStatusSchema = z.enum(['backlog', 'todo', 'doing', 'done']);
+const PrioritySchema = z.enum(['low', 'medium', 'high']);
+
+const NewTaskSchema = z.object({
+  title: z.string().trim().min(1, 'Título é obrigatório').max(255, 'Título muito longo (máx 255 caracteres)'),
+  description: z.string().max(10000, 'Descrição muito longa').optional().or(z.literal('')),
+  priority: PrioritySchema,
+  due_date: z.string().optional().or(z.literal('')),
+  status: TaskStatusSchema,
+});
+
+const EditTaskSchema = z.object({
+  title: z.string().trim().min(1, 'Título é obrigatório').max(255, 'Título muito longo (máx 255 caracteres)'),
+  description: z.string().max(10000, 'Descrição muito longa').optional().or(z.literal('')),
+  priority: PrioritySchema,
+  due_date: z.string().optional().or(z.literal('')),
+});
+
+const AuthSchema = z.object({
+  email: z.string().trim().email('E-mail inválido'),
+  password: z.string().min(6, 'Senha deve ter pelo menos 6 caracteres'),
+});
+
+const NewReminderSchema = z.object({
+  lead_name: z.string().trim().min(1, 'Nome do lead é obrigatório').max(255),
+  type: z.string().min(1),
+  time: z.string().optional().or(z.literal('')),
+  notes: z.string().max(2000).optional().or(z.literal('')),
+});
+
+// Mapeia erros do Supabase para mensagens amigáveis (achado 4.5).
+// Nunca expomos o erro técnico bruto (pode vazar info sensível do banco).
+function friendlyAuthError(raw: string | undefined): string {
+  if (!raw) return 'Não foi possível completar a operação. Tente novamente.';
+  const lower = raw.toLowerCase();
+  if (lower.includes('invalid login') || lower.includes('invalid credentials')) {
+    return 'E-mail ou senha incorretos.';
+  }
+  if (lower.includes('email not confirmed')) {
+    return 'Confirme seu e-mail antes de entrar.';
+  }
+  if (lower.includes('already registered') || lower.includes('user already')) {
+    return 'Este e-mail já está cadastrado. Faça login.';
+  }
+  if (lower.includes('password')) {
+    return 'Senha inválida. Use pelo menos 6 caracteres.';
+  }
+  if (lower.includes('rate limit')) {
+    return 'Muitas tentativas. Aguarde alguns minutos e tente novamente.';
+  }
+  return 'Não foi possível completar a operação. Tente novamente.';
+}
 
 // --- Types ---
 type TaskStatus = 'backlog' | 'todo' | 'doing' | 'done';
@@ -78,7 +133,9 @@ const StatCard = ({ title, value, icon: Icon, color }: any) => (
 );
 
 export default function PlannerApp() {
-  const [session, setSession] = useState<any>(null);
+  // Session state: armazena o objeto user validado pelo Auth Server (via getUser()).
+  // Mantemos a forma { user: {...} } para minimizar refactor nas referências existentes a `session.user`.
+  const [session, setSession] = useState<{ user: { id: string; email?: string } } | null>(null);
   const [loadingSession, setLoadingSession] = useState(true);
 
   // Auth Form State
@@ -123,6 +180,9 @@ export default function PlannerApp() {
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [editForm, setEditForm] = useState({ title: '', description: '', priority: 'medium' as 'low' | 'medium' | 'high', due_date: '' });
 
+  // Delete Confirmation State (protege contra cliques acidentais no botão de lixeira)
+  const [taskToDelete, setTaskToDelete] = useState<Task | null>(null);
+
   // Search State
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -139,22 +199,46 @@ export default function PlannerApp() {
   const [activeReminderAlert, setActiveReminderAlert] = useState<Reminder | null>(null);
 
   // --- Auth & Initial Fetch ---
+  // Usamos getUser() em vez de getSession() porque getUser() revalida o token
+  // contra o Auth Server do Supabase, enquanto getSession() apenas lê o cookie
+  // local (achado 3.3 do relatório de segurança).
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
+    let mounted = true;
+
+    supabase.auth.getUser().then(({ data: { user } }) => {
+      if (!mounted) return;
+      if (user) {
+        setSession({ user: { id: user.id, email: user.email } });
+        fetchTasks(user.id);
+        fetchReminders(user.id);
+      } else {
+        setSession(null);
+      }
       setLoadingSession(false);
-      if (session) fetchTasks(session.user.id);
+    }).catch(() => {
+      if (!mounted) return;
+      setSession(null);
+      setLoadingSession(false);
     });
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setSession(session);
-      if (session) {
-        fetchTasks(session.user.id);
-        fetchReminders(session.user.id);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, _sessionFromEvent) => {
+      // Em qualquer mudança de auth, revalidamos via getUser() em vez de confiar
+      // no payload do evento (que vem do cookie local).
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!mounted) return;
+      if (user) {
+        setSession({ user: { id: user.id, email: user.email } });
+        fetchTasks(user.id);
+        fetchReminders(user.id);
+      } else {
+        setSession(null);
       }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
 
   // Notification Polling
@@ -216,16 +300,29 @@ export default function PlannerApp() {
   const handleLogin = async (e: React.FormEvent, isSignUp = false) => {
     e.preventDefault();
     setAuthError('');
+
+    // Validação client-side antes de chamar o Supabase (achado 4.1).
+    const parsed = AuthSchema.safeParse({ email, password });
+    if (!parsed.success) {
+      setAuthError(parsed.error.issues[0]?.message ?? 'Dados inválidos.');
+      return;
+    }
+
     setAuthLoading(true);
 
     const { error } = isSignUp
-      ? await supabase.auth.signUp({ email, password })
-      : await supabase.auth.signInWithPassword({ email, password });
+      ? await supabase.auth.signUp({ email: parsed.data.email, password: parsed.data.password })
+      : await supabase.auth.signInWithPassword({ email: parsed.data.email, password: parsed.data.password });
 
     if (error) {
-      setAuthError(error.message);
+      // Mensagem amigável, sem vazar detalhes técnicos (achado 4.5).
+      setAuthError(friendlyAuthError(error.message));
+      // Log apenas em dev para facilitar debug.
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('[auth]', error);
+      }
     } else if (isSignUp) {
-      alert("Comando de cadastro enviado com sucesso! \\n\\nSe a página não entrar sozinha agora, é porque o Supabase bloqueou por padrão pedindo verificação de e-mail.\\n\\nPara desbloquear o modo de desenvolvedor fácil: Abra o seu Supabase > Authentication > Providers > Email > Desmarque a opção 'Confirm email' e salve.");
+      setAuthError('Cadastro enviado! Se a confirmação por e-mail estiver ativa, verifique sua caixa de entrada.');
     }
     setAuthLoading(false);
   };
@@ -240,7 +337,14 @@ export default function PlannerApp() {
     e.preventDefault();
     if (!session || !selectedCalendarDate) return;
 
-    const [hours, minutes] = (newReminder.time || '00:00').split(':');
+    // Validação Zod (achado 4.1).
+    const parsed = NewReminderSchema.safeParse(newReminder);
+    if (!parsed.success) {
+      setToast({ message: parsed.error.issues[0]?.message ?? 'Dados inválidos.', kind: 'error' });
+      return;
+    }
+
+    const [hours, minutes] = (parsed.data.time || '00:00').split(':');
     const reminderTime = new Date(selectedCalendarDate);
     reminderTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
 
@@ -248,10 +352,10 @@ export default function PlannerApp() {
       .from('reminders')
       .insert({
         user_id: session.user.id,
-        lead_name: newReminder.lead_name,
-        reminder_type: newReminder.type,
+        lead_name: parsed.data.lead_name,
+        reminder_type: parsed.data.type,
         reminder_time: reminderTime.toISOString(),
-        notes: newReminder.notes
+        notes: parsed.data.notes ?? '',
       })
       .select()
       .single();
@@ -261,7 +365,10 @@ export default function PlannerApp() {
       setIsReminderModalOpen(false);
       setNewReminder({ lead_name: '', type: 'Follow-up de Lead', time: '', notes: '' });
     } else if (error) {
-      console.error(error);
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('[reminders.insert]', error);
+      }
+      setToast({ message: 'Não foi possível salvar o lembrete. Tente novamente.', kind: 'error' });
     }
   };
 
@@ -273,29 +380,46 @@ export default function PlannerApp() {
     setCurrentDate(new Date(currentDate.getFullYear(), currentDate.getMonth() - 1, 1));
   };
 
+  // Toast state para mensagens de erro não-críticas (achado 4.5 — substitui alert()).
+  const [toast, setToast] = useState<{ message: string; kind: 'error' | 'info' } | null>(null);
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
   // --- Task Logic ---
   const handleAddTask = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTask.title || !session) return;
+    if (!session) return;
+
+    // Validação Zod (achado 4.1).
+    const parsed = NewTaskSchema.safeParse(newTask);
+    if (!parsed.success) {
+      setToast({ message: parsed.error.issues[0]?.message ?? 'Dados inválidos.', kind: 'error' });
+      return;
+    }
+
     setIsAdding(true);
 
-    const targetStatus = newTask.status || 'backlog';
+    const targetStatus = parsed.data.status;
     const maxOrder = tasks
       .filter(t => t.status === targetStatus)
       .reduce((max, t) => Math.max(max, t.order_index), -1);
 
     const taskToInsert = {
-      title: newTask.title,
-      description: newTask.description,
+      title: parsed.data.title,
+      description: parsed.data.description ?? '',
       status: targetStatus,
       order_index: maxOrder + 1,
       user_id: session.user.id,
-      priority: newTask.priority
+      priority: parsed.data.priority,
     };
 
     // Optimistic Update
     const tempId = crypto.randomUUID();
-    setTasks(prev => [...prev, { ...taskToInsert, id: tempId, due_date: newTask.due_date || null }]);
+    setTasks(prev => [...prev, { ...taskToInsert, id: tempId, due_date: parsed.data.due_date || null }]);
     setNewTask({ title: '', description: '', priority: 'medium' as 'low' | 'medium' | 'high', due_date: '', status: 'backlog' as TaskStatus });
 
     const { data, error } = await supabase.from('tasks').insert(taskToInsert).select().single();
@@ -304,8 +428,10 @@ export default function PlannerApp() {
       setTasks(prev => prev.map(t => t.id === tempId ? data : t));
     } else {
       setTasks(prev => prev.filter(t => t.id !== tempId)); // Rollback
-      console.error('Insert error:', error);
-      alert(`Erro Supabase: ${error?.message || error?.details || JSON.stringify(error)}`);
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('[tasks.insert]', error);
+      }
+      setToast({ message: 'Não foi possível salvar a tarefa. Tente novamente.', kind: 'error' });
     }
     setIsAdding(false);
   };
@@ -315,7 +441,13 @@ export default function PlannerApp() {
     setTasks(prev => prev.filter(t => t.id !== id)); // Optimistic delete
 
     const { error } = await supabase.from('tasks').delete().eq('id', id);
-    if (error) setTasks(backup); // Rollback
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('[tasks.delete]', error);
+      }
+      setToast({ message: 'Não foi possível excluir a tarefa. Alterações revertidas.', kind: 'error' });
+      setTasks(backup); // Rollback
+    }
   };
 
   const openEditModal = (task: Task) => {
@@ -330,11 +462,20 @@ export default function PlannerApp() {
 
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!editingTask || !editForm.title) return;
+    if (!editingTask) return;
+
+    // Validação Zod (achado 4.1).
+    const parsed = EditTaskSchema.safeParse(editForm);
+    if (!parsed.success) {
+      setToast({ message: parsed.error.issues[0]?.message ?? 'Dados inválidos.', kind: 'error' });
+      return;
+    }
 
     const updatePayload = {
-      ...editForm,
-      due_date: editForm.due_date || null
+      title: parsed.data.title,
+      description: parsed.data.description ?? '',
+      priority: parsed.data.priority,
+      due_date: parsed.data.due_date || null,
     };
 
     const previousTasks = [...tasks];
@@ -346,8 +487,10 @@ export default function PlannerApp() {
       .eq('id', editingTask.id);
 
     if (error) {
-      console.error(error);
-      alert('Erro ao atualizar. Voltando ao estado original.');
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('[tasks.update]', error);
+      }
+      setToast({ message: 'Não foi possível atualizar a tarefa. Alterações revertidas.', kind: 'error' });
       setTasks(previousTasks); // Rollback
     }
 
@@ -790,7 +933,7 @@ export default function PlannerApp() {
                                             <Edit2 className="w-3.5 h-3.5" />
                                           </button>
                                           <button
-                                            onClick={() => deleteTask(task.id)}
+                                            onClick={() => setTaskToDelete(task)}
                                             className="p-1 hover:bg-red-50 dark:hover:bg-red-900/30 text-red-500 rounded-md transition-all"
                                           >
                                             <Trash2 className="w-3.5 h-3.5" />
@@ -998,6 +1141,62 @@ export default function PlannerApp() {
           </div>
         )}
 
+        {/* --- Delete Confirmation Modal --- */}
+        {taskToDelete && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="bg-white dark:bg-zinc-900 w-full max-w-md p-6 rounded-3xl shadow-2xl border border-zinc-200 dark:border-zinc-800"
+            >
+              <div className="flex items-start gap-4 mb-6">
+                <div className="p-3 bg-red-50 dark:bg-red-900/30 rounded-2xl shrink-0">
+                  <AlertCircle className="w-6 h-6 text-red-500" />
+                </div>
+                <div className="flex-1">
+                  <h2 className="text-lg font-bold text-zinc-900 dark:text-white mb-1">Excluir tarefa?</h2>
+                  <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                    Esta ação não pode ser desfeita. A tarefa será removida permanentemente.
+                  </p>
+                </div>
+              </div>
+
+              <div className="bg-zinc-50 dark:bg-black/40 border border-zinc-200 dark:border-zinc-800 rounded-xl p-3 mb-6">
+                <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100 line-clamp-2">
+                  {taskToDelete.title}
+                </p>
+                {taskToDelete.description && (
+                  <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1 line-clamp-2">
+                    {taskToDelete.description}
+                  </p>
+                )}
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setTaskToDelete(null)}
+                  className="flex-1 px-4 py-3 bg-zinc-100 dark:bg-zinc-800 text-zinc-900 dark:text-white font-semibold rounded-xl hover:bg-zinc-200 dark:hover:bg-zinc-700 transition-colors"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (taskToDelete) deleteTask(taskToDelete.id);
+                    setTaskToDelete(null);
+                  }}
+                  className="flex-1 px-4 py-3 bg-red-600 text-white font-bold rounded-xl hover:bg-red-700 transition-colors shadow-lg shadow-red-600/20"
+                >
+                  Excluir
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
         {/* --- Reminder Auto-Alert --- */}
         <AnimatePresence>
           {activeReminderAlert && (
@@ -1044,7 +1243,35 @@ export default function PlannerApp() {
             </div>
           )}
         </AnimatePresence>
-      </AnimatePresence>
+
+        {/* --- Toast de Mensagens (substitui alert() — achado 4.5) --- */}
+        <AnimatePresence>
+          {toast && (
+            <motion.div
+              initial={{ opacity: 0, y: 20, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 20, scale: 0.95 }}
+              transition={{ duration: 0.2 }}
+              className={`fixed bottom-8 left-1/2 -translate-x-1/2 z-[120] px-5 py-3 rounded-2xl shadow-2xl border backdrop-blur-sm flex items-center gap-3 max-w-md mx-4 ${
+                toast.kind === 'error'
+                  ? 'bg-red-50 dark:bg-red-950/90 border-red-200 dark:border-red-900/60 text-red-900 dark:text-red-100'
+                  : 'bg-zinc-50 dark:bg-zinc-900/95 border-zinc-200 dark:border-zinc-800 text-zinc-900 dark:text-zinc-100'
+              }`}
+              role="status"
+              aria-live="polite"
+            >
+              <AlertCircle className={`w-5 h-5 shrink-0 ${toast.kind === 'error' ? 'text-red-500' : 'text-zinc-500'}`} />
+              <p className="text-sm font-medium flex-1">{toast.message}</p>
+              <button
+                onClick={() => setToast(null)}
+                className="p-1 rounded-md hover:bg-black/5 dark:hover:bg-white/5 transition-colors shrink-0"
+                aria-label="Fechar"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </motion.div>
+          )}
+        </AnimatePresence>
     </div>
   );
 }
