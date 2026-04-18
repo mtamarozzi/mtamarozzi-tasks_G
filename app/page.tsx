@@ -321,21 +321,27 @@ export default function PlannerApp() {
 
     setAuthLoading(true);
 
-    const { error } = isSignUp
-      ? await supabase.auth.signUp({ email: parsed.data.email, password: parsed.data.password })
-      : await supabase.auth.signInWithPassword({ email: parsed.data.email, password: parsed.data.password });
+    try {
+      const { error } = isSignUp
+        ? await supabase.auth.signUp({ email: parsed.data.email, password: parsed.data.password })
+        : await supabase.auth.signInWithPassword({ email: parsed.data.email, password: parsed.data.password });
 
-    if (error) {
-      // Mensagem amigável, sem vazar detalhes técnicos (achado 4.5).
-      setAuthError(friendlyAuthError(error.message));
-      // Log apenas em dev para facilitar debug.
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('[auth]', error);
+      if (error) {
+        setAuthError(friendlyAuthError(error.message));
+        if (process.env.NODE_ENV !== 'production') {
+          console.error('[auth]', error);
+        }
+      } else if (isSignUp) {
+        setAuthError('Cadastro enviado! Se a confirmação por e-mail estiver ativa, verifique sua caixa de entrada.');
       }
-    } else if (isSignUp) {
-      setAuthError('Cadastro enviado! Se a confirmação por e-mail estiver ativa, verifique sua caixa de entrada.');
+    } catch (err) {
+      setAuthError('Não foi possível completar a operação. Tente novamente.');
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('[auth] exception', err);
+      }
+    } finally {
+      setAuthLoading(false);
     }
-    setAuthLoading(false);
   };
 
   const handleLogout = async () => {
@@ -367,25 +373,32 @@ export default function PlannerApp() {
       notes: newReminder.notes
     };
 
-    const { data, error } = await supabase
-      .from('reminders')
-      .insert({
-        user_id: session.user.id,
-        lead_name: parsed.data.lead_name,
-        reminder_type: parsed.data.type,
-        reminder_time: reminderTime.toISOString(),
-        notes: parsed.data.notes ?? '',
-      })
-      .select()
-      .single();
+    try {
+      const { data, error } = await supabase
+        .from('reminders')
+        .insert({
+          user_id: session.user.id,
+          lead_name: parsed.data.lead_name,
+          reminder_type: parsed.data.type,
+          reminder_time: reminderTime.toISOString(),
+          notes: parsed.data.notes ?? '',
+        })
+        .select()
+        .single();
 
-    if (data) {
-      setReminders(prev => [...prev, data]);
-      setIsReminderModalOpen(false);
-      setNewReminder({ lead_name: '', type: 'Follow-up de Lead', time: '', notes: '' });
-    } else if (error) {
+      if (data) {
+        setReminders(prev => [...prev, data]);
+        setIsReminderModalOpen(false);
+        setNewReminder({ lead_name: '', type: 'Follow-up de Lead', time: '', notes: '' });
+      } else if (error) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.error('[reminders.insert]', error);
+        }
+        setToast({ message: 'Não foi possível salvar o lembrete. Tente novamente.', kind: 'error' });
+      }
+    } catch (err) {
       if (process.env.NODE_ENV !== 'production') {
-        console.error('[reminders.insert]', error);
+        console.error('[reminders.insert] exception', err);
       }
       setToast({ message: 'Não foi possível salvar o lembrete. Tente novamente.', kind: 'error' });
     }
@@ -441,18 +454,31 @@ export default function PlannerApp() {
     setTasks(prev => [...prev, { ...taskToInsert, id: tempId, due_date: parsed.data.due_date || null }]);
     setNewTask({ title: '', description: '', priority: 'medium' as 'low' | 'medium' | 'high', due_date: '', status: 'backlog' as TaskStatus });
 
-    const { data, error } = await supabase.from('tasks').insert(taskToInsert).select().single();
+    // try/catch/finally é obrigatório aqui: o cliente do @supabase/ssr pode
+    // REJEITAR a promise (em vez de retornar {data, error}) em casos de lock
+    // contention, refresh token falho ou erro de rede. Sem o finally, qualquer
+    // rejeição deixa isAdding=true para sempre e o botão em spinner infinito.
+    try {
+      const { data, error } = await supabase.from('tasks').insert(taskToInsert).select().single();
 
-    if (data) {
-      setTasks(prev => prev.map(t => t.id === tempId ? data : t));
-    } else {
+      if (data) {
+        setTasks(prev => prev.map(t => t.id === tempId ? data : t));
+      } else {
+        setTasks(prev => prev.filter(t => t.id !== tempId)); // Rollback
+        if (process.env.NODE_ENV !== 'production') {
+          console.error('[tasks.insert]', error);
+        }
+        setToast({ message: 'Não foi possível salvar a tarefa. Tente novamente.', kind: 'error' });
+      }
+    } catch (err) {
       setTasks(prev => prev.filter(t => t.id !== tempId)); // Rollback
       if (process.env.NODE_ENV !== 'production') {
-        console.error('[tasks.insert]', error);
+        console.error('[tasks.insert] exception', err);
       }
       setToast({ message: 'Não foi possível salvar a tarefa. Tente novamente.', kind: 'error' });
+    } finally {
+      setIsAdding(false);
     }
-    setIsAdding(false);
   };
 
   const deleteTask = async (id: string) => {
@@ -464,7 +490,7 @@ export default function PlannerApp() {
       if (process.env.NODE_ENV !== 'production') {
         console.error('[tasks.delete]', error);
       }
-      setToast({ message: 'Não foi possível excluir a tarefa. Alterações revertidas.', kind: 'error' });
+      setToast({ message: 'Não foi possível excluir a tarefa. Alterações revertidas.', kind: 'error' });
       setTasks(backup); // Rollback
     }
   };
@@ -500,20 +526,28 @@ export default function PlannerApp() {
     const previousTasks = [...tasks];
     setTasks(prev => prev.map(t => t.id === editingTask.id ? { ...t, ...updatePayload } : t)); // Optimistic
 
-    const { error } = await supabase
-      .from('tasks')
-      .update(updatePayload)
-      .eq('id', editingTask.id);
+    try {
+      const { error } = await supabase
+        .from('tasks')
+        .update(updatePayload)
+        .eq('id', editingTask.id);
 
-    if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('[tasks.update]', error);
+      if (error) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.error('[tasks.update]', error);
+        }
+        setToast({ message: 'Não foi possível atualizar a tarefa. Alterações revertidas.', kind: 'error' });
+        setTasks(previousTasks); // Rollback
       }
-      setToast({ message: 'Não foi possível atualizar a tarefa. Alterações revertidas.', kind: 'error' });
+    } catch (err) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('[tasks.update] exception', err);
+      }
+      setToast({ message: 'Não foi possível atualizar a tarefa. Alterações revertidas.', kind: 'error' });
       setTasks(previousTasks); // Rollback
+    } finally {
+      setEditingTask(null);
     }
-
-    setEditingTask(null);
   };
 
   const onDragEnd = async (result: DropResult) => {
