@@ -1,4 +1,4 @@
-import { createClient } from '@supabase/supabase-js'
+import { createBrowserClient } from '@supabase/ssr'
 
 // Validação fail-fast das variáveis de ambiente (achado 1.6 do relatório de segurança).
 // Se uma das chaves não estiver presente, falha imediatamente com mensagem clara
@@ -35,4 +35,8 @@ try {
   )
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+// createBrowserClient usa cookies (compartilhados com o middleware SSR) em vez
+// de localStorage. Isso elimina o conflito de lock entre o client do browser
+// (@supabase/supabase-js) e o middleware (@supabase/ssr) que causava o warning
+// "Lock not released within 5000ms" e o spinner de 5s no carregamento.
+export const supabase = createBrowserClient(supabaseUrl, supabaseAnonKey)
