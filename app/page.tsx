@@ -14,6 +14,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { z } from 'zod';
 import { supabase } from '@/lib/supabase';
+import { taskInsertSchema, taskUpdateSchema, reminderInsertSchema } from '@/lib/schemas';
 
 // --- Validação de Inputs (achado 4.1 do relatório de segurança) ---
 const TaskStatusSchema = z.enum(['backlog', 'todo', 'doing', 'done']);
@@ -348,6 +349,20 @@ export default function PlannerApp() {
     const reminderTime = new Date(selectedCalendarDate);
     reminderTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
 
+    const reminderPayload = {
+      user_id: session.user.id,
+      lead_name: newReminder.lead_name,
+      reminder_type: newReminder.type,
+      reminder_time: reminderTime.toISOString(),
+      notes: newReminder.notes
+    };
+
+    const parsedReminder = reminderInsertSchema.safeParse(reminderPayload)
+    if (!parsedReminder.success) {
+      console.error('Dados do lembrete inválidos:', parsedReminder.error.flatten())
+      return
+    }
+
     const { data, error } = await supabase
       .from('reminders')
       .insert({
@@ -422,7 +437,14 @@ export default function PlannerApp() {
     setTasks(prev => [...prev, { ...taskToInsert, id: tempId, due_date: parsed.data.due_date || null }]);
     setNewTask({ title: '', description: '', priority: 'medium' as 'low' | 'medium' | 'high', due_date: '', status: 'backlog' as TaskStatus });
 
-    const { data, error } = await supabase.from('tasks').insert(taskToInsert).select().single();
+    const parsed = taskInsertSchema.safeParse(taskToInsert)
+    if (!parsed.success) {
+      console.error('Dados inválidos:', parsed.error.flatten())
+      setIsAdding(false)
+      return
+    }
+
+    const { data, error } = await supabase.from('tasks').insert(parsed.data).select().single();
 
     if (data) {
       setTasks(prev => prev.map(t => t.id === tempId ? data : t));
@@ -481,9 +503,15 @@ export default function PlannerApp() {
     const previousTasks = [...tasks];
     setTasks(prev => prev.map(t => t.id === editingTask.id ? { ...t, ...updatePayload } : t)); // Optimistic
 
+    const parsedUpdate = taskUpdateSchema.safeParse(updatePayload)
+    if (!parsedUpdate.success) {
+      console.error('Dados inválidos:', parsedUpdate.error.flatten())
+      return
+    }
+
     const { error } = await supabase
       .from('tasks')
-      .update(updatePayload)
+      .update(parsedUpdate.data)
       .eq('id', editingTask.id);
 
     if (error) {
