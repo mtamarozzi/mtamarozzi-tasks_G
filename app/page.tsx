@@ -205,9 +205,14 @@ export default function PlannerApp() {
   useEffect(() => {
     let mounted = true;
 
-    supabase.auth.getUser().then(({ data: { user } }) => {
+    supabase.auth.getUser().then(async ({ data: { user }, error }) => {
       if (!mounted) return;
-      if (user) {
+      // Cookie/token stale (403, JWT inválido, projeto rotacionado): limpa a
+      // sessão local para o próximo reload não repetir o erro e travar em spinner.
+      if (error) {
+        await supabase.auth.signOut().catch(() => {});
+        setSession(null);
+      } else if (user) {
         setSession({ user: { id: user.id, email: user.email } });
         fetchTasks(user.id);
         fetchReminders(user.id);
@@ -215,8 +220,9 @@ export default function PlannerApp() {
         setSession(null);
       }
       setLoadingSession(false);
-    }).catch(() => {
+    }).catch(async () => {
       if (!mounted) return;
+      await supabase.auth.signOut().catch(() => {});
       setSession(null);
       setLoadingSession(false);
     });
@@ -224,8 +230,13 @@ export default function PlannerApp() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, _sessionFromEvent) => {
       // Em qualquer mudança de auth, revalidamos via getUser() em vez de confiar
       // no payload do evento (que vem do cookie local).
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user }, error } = await supabase.auth.getUser();
       if (!mounted) return;
+      if (error) {
+        await supabase.auth.signOut().catch(() => {});
+        setSession(null);
+        return;
+      }
       if (user) {
         setSession({ user: { id: user.id, email: user.email } });
         fetchTasks(user.id);
