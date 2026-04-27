@@ -14,6 +14,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { z } from 'zod';
 import { supabase } from '@/lib/supabase';
+import CursorParticles from './components/CursorParticles';
 
 // --- Validação de Inputs (achado 4.1 do relatório de segurança) ---
 const TaskStatusSchema = z.enum(['backlog', 'todo', 'doing', 'done']);
@@ -740,6 +741,9 @@ export default function PlannerApp() {
             }}
           />
         </div>
+
+        {/* Efeito de partículas interativas */}
+        <CursorParticles />
 
         {/* Todo o conteúdo principal fica acima dos orbes */}
         <div className="relative z-10">
