@@ -206,8 +206,23 @@ export default function PlannerApp() {
   useEffect(() => {
     let mounted = true;
 
+    // Timeout de segurança: se getUser() não responder em 5s, libera o spinner
+    // e mostra a tela de login. Protege contra trava em produção por problema de
+    // rede, lock do supabase-js, ou Auth Server lento.
+    const safetyTimeout = setTimeout(() => {
+      if (!mounted) return;
+      if (loadingSession) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.warn('[auth] getUser() não respondeu em 5s, liberando spinner');
+        }
+        setSession(null);
+        setLoadingSession(false);
+      }
+    }, 5000);
+
     supabase.auth.getUser().then(async ({ data: { user }, error }) => {
       if (!mounted) return;
+      clearTimeout(safetyTimeout);
       // Cookie/token stale (403, JWT inválido, projeto rotacionado): limpa a
       // sessão local para o próximo reload não repetir o erro e travar em spinner.
       if (error) {
@@ -223,6 +238,7 @@ export default function PlannerApp() {
       setLoadingSession(false);
     }).catch(async () => {
       if (!mounted) return;
+      clearTimeout(safetyTimeout);
       await supabase.auth.signOut().catch(() => {});
       setSession(null);
       setLoadingSession(false);
@@ -249,6 +265,7 @@ export default function PlannerApp() {
 
     return () => {
       mounted = false;
+      clearTimeout(safetyTimeout);
       subscription.unsubscribe();
     };
   }, []);
